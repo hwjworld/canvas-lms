@@ -38,7 +38,7 @@ describe "UserFollow" do
   end
 
   context "across shards" do
-    it_should_behave_like "sharding"
+    specs_require_sharding
 
     before do
       @user1 = user_model
@@ -53,7 +53,7 @@ describe "UserFollow" do
     it "should delete on the other shard on un-follow" do
       @uf = @user1.user_follows.create!(:followed_item => @collection)
       @uf.shard.should == Shard.default
-      @uf2 = @collection.shard.activate { UserFollow.first(:conditions => { :following_user_id => @user1.id, :followed_item_id => @collection.id }) }
+      @uf2 = @collection.shard.activate { UserFollow.where(:following_user_id => @user1, :followed_item_id => @collection).first }
       @uf2.shard.should == @collection.shard
       @uf.destroy
       expect { @collection.shard.activate { @uf2.reload } }.to raise_error(ActiveRecord::RecordNotFound)
@@ -62,7 +62,7 @@ describe "UserFollow" do
     it "should delete from the other shard to the current" do
       @uf = @user1.user_follows.create!(:followed_item => @collection)
       @uf.shard.should == Shard.default
-      @uf2 = @collection.shard.activate { UserFollow.first(:conditions => { :following_user_id => @user1.id, :followed_item_id => @collection.id }) }
+      @uf2 = @collection.shard.activate { UserFollow.where(:following_user_id => @user1, :followed_item_id => @collection).first }
       @uf2.shard.should == @collection.shard
       @uf2.destroy
       expect { @uf.reload }.to raise_error(ActiveRecord::RecordNotFound)
@@ -70,7 +70,8 @@ describe "UserFollow" do
 
     it "should unfollow private collections on group unfollow" do
       @shard1.activate do
-        @group = Group.create!(:group_category => GroupCategory.communities_for(Account.default), :is_public => true, :join_level => 'parent_context_auto_join')
+        account = Account.create!
+        @group = Group.create!(:group_category => GroupCategory.communities_for(account), :is_public => true, :join_level => 'parent_context_auto_join', :context => account)
         @coll = @group.collections.create!(:name => 'col1', :visibility => 'private')
       end
       @membership = @group.add_user(@user1)

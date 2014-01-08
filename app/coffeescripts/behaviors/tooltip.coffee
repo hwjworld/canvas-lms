@@ -20,7 +20,44 @@ define [
   'jqueryui/tooltip'
 ], (_, $) ->
 
-  CARET_SIZE = 5
+  # create a custom widget that inherits from the default jQuery UI
+  # tooltip but extends the open method with a setTimeout wrapper so
+  # that our browser can scroll to the tabbed focus element before
+  # positioning the tooltip relative to window.
+  do ($) ->
+    $.widget "custom.timeoutTooltip", $.ui.tooltip,
+      _open: ( event, target, content ) ->
+        # if you move very fast, it's possible that
+        # @timeout will be defined
+        return if @timeout
+        apply = @_superApply.bind(@, arguments)
+        @timeout = setTimeout (=>
+          # make sure close will be called
+          delete @timeout
+          # remove extra handlers we added, super will add them back
+          @_off(target, "mouseleave focusout keyup")
+          apply.call(@)
+        ), 20
+        # this is from the jquery ui tooltip _open
+        # we need to bind events to trigger close so that the
+        # timeout is cleared when we mouseout / or leave focus
+        @_on( target, {
+          mouseleave: "close"
+          focusout: "close"
+          keyup: ( event ) ->
+            if ( event.keyCode == $.ui.keyCode.ESCAPE )
+              fakeEvent = $.Event(event)
+              fakeEvent.currentTarget = target[0]
+              this.close( fakeEvent, true )
+          }
+        )
+
+      close: (event) ->
+        if @timeout
+          clearTimeout(@timeout)
+          delete @timeout
+          return
+        @_superApply(arguments)
 
   # you can provide a 'using' option to jqueryUI position (which gets called by jqueryui Tooltip to
   # position it on the screen), it will be passed the position cordinates and a feedback object which,
@@ -43,42 +80,54 @@ define [
         feedback.important
       ].join(' '))
 
-  positions =
-    right:
-      my: "left center"
-      at: "right+#{CARET_SIZE} center"
-      collision: 'none none'
-    left:
-      my: "right center"
-      at: "left-#{CARET_SIZE} center"
-      collision: 'none none'
-    top:
-      my: "center bottom"
-      at: "center top-#{CARET_SIZE}"
-      collision: 'none none'
+  setPosition = (opts) ->
+    caret = ->
+      if opts.tooltipClass?.match('popover')
+        30
+      else
+        5
+    positions =
+      right:
+        my: "left center"
+        at: "right+#{caret()} center"
+        collision: 'flipfit flipfit'
+      left:
+        my: "right center"
+        at: "left-#{caret()} center"
+        collision: 'flipfit flipfit'
+      top:
+        my: "center bottom"
+        at: "center top-#{caret()}"
+        collision: 'flipfit flipfit'
+      bottom:
+        my: "center top"
+        at: "center bottom+#{caret()}"
+        collision: 'flipfit flipfit'
+    if opts.position of positions
+      opts.position = positions[opts.position]
 
-    bottom:
-      my: "center top"
-      at: "center bottom+#{CARET_SIZE}"
-      collision: 'none none'
-
-  $('body').on 'mouseover', '[data-tooltip]', (event) ->
+  $('body').on 'mouseenter focusin', '[data-tooltip]', (event) ->
     $this = $(this)
     opts = $this.data('tooltip')
 
     # allow specifying position by simply doing <a data-tooltip="left">
     # and allow shorthand top|bottom|left|right positions like <a data-tooltip='{"position":"left"}'>
-    if opts of positions
+    if opts in ['right', 'left', 'top', 'bottom']
       opts = position: opts
     opts ||= {}
     opts.position ||= 'top'
-    if opts.position of positions
-      opts.position = positions[opts.position]
+    setPosition opts
+    if opts.collision
+      opts.position.collision = opts.collision
 
     opts.position.using ||= using
 
+    if $this.data('tooltip-title')
+      opts.content = -> $(this).data('tooltip-title')
+      opts.items = '[data-tooltip-title]'
+
     $this
       .removeAttr('data-tooltip')
-      .tooltip(opts)
-      .tooltip('open')
-      .click -> $this.tooltip('close')
+      .timeoutTooltip(opts)
+      .timeoutTooltip('open')
+      .click -> $this.timeoutTooltip('close')

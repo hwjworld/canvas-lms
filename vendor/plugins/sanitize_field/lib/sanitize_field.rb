@@ -34,7 +34,7 @@ module Instructure #:nodoc:
       style = node['style'] || ""
       # taken from https://github.com/flavorjones/loofah/blob/master/lib/loofah/html5/scrub.rb
       # the gauntlet
-      style = '' unless style =~ /\A([:,\;#%.\(\)\/\sa-zA-Z0-9!]|\w-\w|\'[\s\w]+\'|\"[\s\w]+\"|\([\d,\s]+\))*\z/
+      style = '' unless style =~ /\A([-:,\;#%.\(\)\/\sa-zA-Z0-9!]|\w-\w|\'[\s\w]+\'|\"[\s\w]+\"|\([\d,\s]+\))*\z/
       style = '' unless style =~ /\A\s*([-\w]+\s*:[^\;]*(\;\s*|$))*\z/
 
       config = env[:config]
@@ -77,7 +77,7 @@ module Instructure #:nodoc:
       :elements => [
         'a', 'b', 'blockquote', 'br', 'caption', 'cite', 'code', 'col',
         'hr', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8',
-        'del', 'ins', 'iframe',
+        'del', 'ins', 'iframe', 'font',
         'colgroup', 'dd', 'div', 'dl', 'dt', 'em', 'figure', 'figcaption', 'i', 'img', 'li', 'ol', 'p', 'pre',
         'q', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'table', 'tbody', 'td',
         'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'object', 'embed', 'param'],
@@ -99,7 +99,8 @@ module Instructure #:nodoc:
         'ul'         => ['type'],
         'param'      => ['name', 'value'],
         'object'     => ['width', 'height', 'style', 'data', 'type', 'classid', 'codebase'],
-        'embed'      => ['name', 'src', 'type', 'allowfullscreen', 'pluginspage', 'wmode', 'allowscriptaccess', 'width', 'height']
+        'embed'      => ['name', 'src', 'type', 'allowfullscreen', 'pluginspage', 'wmode', 'allowscriptaccess', 'width', 'height'],
+        'font'       => ['face', 'color', 'size']
       },
 
       :protocols => {
@@ -138,7 +139,10 @@ module Instructure #:nodoc:
         /\Amargin-(?:bottom|left|right|top|offset)\z/,
         /\Apadding-(?:bottom|left|right|top)\z/
       ],
-      :transformers => lambda { |env| Instructure::SanitizeField.sanitize_style(env) if env[:node]['style'] }
+      :transformers => lambda { |env|
+        Instructure::SanitizeField.sanitize_style(env) if env[:node]['style']
+        Sanitize.clean_node!(env[:node], {:remove_contents => true}) if env[:node_name] == 'style'
+      }
     }
 
     module ClassMethods
@@ -155,7 +159,11 @@ module Instructure #:nodoc:
         @config.fields = []
         @config.allow_comments = true
         args.each { |arg| infer_sanitize_arg(arg) }
-        @config.fields.each { |field| write_inheritable_hash(:fully_sanitize_fields, {field => @config.sanitizer.first} ) }
+        @config.fields.each do |field|
+          class_attribute :fully_sanitize_fields_config
+          fields = (self.fully_sanitize_fields_config ||= {})
+          fields[field] = @config.sanitizer.first
+        end
 
         before_save :fully_sanitize_fields
       end
@@ -191,7 +199,7 @@ module Instructure #:nodoc:
         # configuration set for that specific field or 
         # Sanitize::Config::RESTRICTED as the default. 
         def fully_sanitize_fields
-          fields_hash = self.class.read_inheritable_attribute(:fully_sanitize_fields) || {}
+          fields_hash = self.class.fully_sanitize_fields_config || {}
           fields_hash.each do |field, config|
             config ||= Sanitize::Config::RESTRICTED
             config = Sanitize::Config::RESTRICTED if config.empty?

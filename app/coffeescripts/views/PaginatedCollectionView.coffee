@@ -35,10 +35,16 @@ define [
     # Adds a loading indicator element
 
     els: _.extend({}, CollectionView::els,
-      '.loadingIndicator': '$loadingIndicator'
+      '.paginatedLoadingIndicator': '$loadingIndicator'
     )
 
+    @optionProperty 'scrollableElement'
     @optionProperty 'scrollContainer'
+
+    ##
+    # Whether the collection should keep fetching pages until below the
+    # viewport. Defaults to false (i.e. just do one fetch per scroll)
+    @optionProperty 'autoFetch'
 
     template: template
 
@@ -48,7 +54,6 @@ define [
     initialize: ->
       super
       @initScrollContainer()
-      @attachScroll()
 
     ##
     # Extends parent to detach scroll container event
@@ -57,9 +62,13 @@ define [
 
     attachCollection: ->
       super
+      @collection.on 'reset', @attachScroll
       @collection.on 'fetched:last', @detachScroll
       @collection.on 'beforeFetch', @showLoadingIndicator
-      @collection.on 'fetch', @hideLoadingIndicator
+      if @autoFetch
+        @collection.on 'fetch', => setTimeout @checkScroll # next tick so events don't stomp on each other
+      else
+        @collection.on 'fetch', @hideLoadingIndicator
 
     ##
     # Sets instance properties regarding the scrollContainer
@@ -67,21 +76,27 @@ define [
     # @api private
 
     initScrollContainer: ->
+      @$scrollableElement = if @scrollableElement
+        $ @scrollableElement
+      else
+        @$el
       @scrollContainer = $ @scrollContainer
       @heightContainer = if @scrollContainer[0] is window
-        # window has no scrollHeight
-        document.body
+        # window has no position
+        $ document.body
       else
-        @scrollContainer[0]
+        @scrollContainer
 
     ##
     # Attaches scroll event to scrollContainer
     #
     # @api private
 
-    attachScroll: ->
-      event = "scroll.pagination:#{@cid}, resize.pagination:#{@cid}"
-      @scrollContainer.on event, @checkScroll
+    attachScroll: =>
+      scroll = "scroll.pagination:#{@cid}"
+      resize = "resize.pagination:#{@cid}"
+      @scrollContainer.on scroll, @checkScroll
+      @scrollContainer.on resize, @checkScroll
 
     ##
     # Removes the scoll event from scrollContainer
@@ -97,12 +112,17 @@ define [
     # @api public
 
     checkScroll: =>
-      return if @fetchingPage
-      distanceToBottom = @heightContainer.scrollHeight -
+      return if @collection.fetchingPage or @collection.fetchingNextPage or not @$el.length
+      elementBottom = @$scrollableElement.position().top +
+        @$scrollableElement.height() -
+        @heightContainer.position().top
+      distanceToBottom = elementBottom -
         @scrollContainer.scrollTop() -
         @scrollContainer.height()
-      if distanceToBottom < @options.buffer
+      if distanceToBottom < @options.buffer and @collection.canFetch('next')
         @collection.fetch page: 'next'
+      else
+        @hideLoadingIndicator()
 
     ##
     # Remove scroll event if view is removed
@@ -113,7 +133,6 @@ define [
       @detachScroll()
       super
 
-
     ##
     # Hides the loading indicator after render
     #
@@ -121,7 +140,7 @@ define [
 
     afterRender: ->
       super
-      @hideLoadingIndicator()
+      @hideLoadingIndicator() unless @collection.fetchingPage
 
     ##
     # Hides the loading indicator
@@ -129,7 +148,7 @@ define [
     # @api private
 
     hideLoadingIndicator: =>
-      @$loadingIndicator.hide()
+      @$loadingIndicator?.hide()
 
     ##
     # Shows the loading indicator
@@ -137,5 +156,4 @@ define [
     # @api private
 
     showLoadingIndicator: =>
-      @$loadingIndicator.show()
-
+      @$loadingIndicator?.show()

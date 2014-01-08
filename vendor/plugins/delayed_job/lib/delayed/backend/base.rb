@@ -18,7 +18,7 @@ module Delayed
       attr_writer :current_shard
 
       def current_shard
-        @current_shard || Shard.default
+        @current_shard || Shard.birth
       end
 
       module ClassMethods
@@ -44,12 +44,29 @@ module Delayed
           options[:max_attempts] ||= Delayed::Worker.max_attempts
           options[:current_shard] = Shard.current
 
+          # If two parameters are given to n_strand, the first param is used
+          # as the strand name for looking up the Setting, while the second
+          # param is appended to make a unique set of strands.
+          #
+          # For instance, you can pass ["my_job_type", # root_account.global_id]
+          # to get a set of n strands per root account, and you can apply the
+          # same default to all.
           if options[:n_strand]
-            strand_name = options.delete(:n_strand)
-            num_strands = Setting.get_cached("#{strand_name}_num_strands", "1").to_i
+            strand_name, ext = options.delete(:n_strand)
+
+            if ext
+              full_strand_name = "#{strand_name}/#{ext}"
+              num_strands = Setting.get("#{full_strand_name}_num_strands", nil)
+            else
+              full_strand_name = strand_name
+            end
+
+            num_strands ||= Setting.get("#{strand_name}_num_strands", nil)
+            num_strands = num_strands ? num_strands.to_i : 1
+
             strand_num = num_strands > 1 ? rand(num_strands) + 1 : 1
-            strand_name += ":#{strand_num}" if strand_num > 1
-            options[:strand] = strand_name
+            full_strand_name += ":#{strand_num}" if strand_num > 1
+            options[:strand] = full_strand_name
           end
 
           if options[:singleton]
@@ -208,8 +225,12 @@ module Delayed
       # Moved into its own method so that new_relic can trace it.
       def invoke_job
         Delayed::Job.in_delayed_job = true
-        payload_object.perform
-        Delayed::Job.in_delayed_job = false
+        begin
+          payload_object.perform
+        ensure
+          Delayed::Job.in_delayed_job = false
+          ::ActiveRecord::Base.clear_active_connections! unless Rails.env.test?
+        end
       end
 
       def batch?
@@ -287,8 +308,7 @@ module Delayed
         end
       end
 
-    protected
-
+    public
       def before_save
         self.queue ||= Delayed::Worker.queue
         self.run_at ||= self.class.db_time_now

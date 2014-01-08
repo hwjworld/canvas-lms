@@ -7,7 +7,7 @@ require [
   module 'elementToggler',
 
     teardown: ->
-      el?.remove() for el in [@$trigger, @$otherTrigger, @$target]
+      el?.remove() for el in [@$trigger, @$otherTrigger, @$target, @$target1, @$target2]
 
   test 'handles data-html-while-target-shown', ->
     @$trigger = $('<a href="#" class="element_toggler" role="button"
@@ -24,7 +24,6 @@ require [
 
     # click to show it
     @$trigger.click()
-    ok @$target.is('[aria-expanded=true]:visible:focus'), "target is shown (and focused since it has a tabindex)"
     msg = 'Handles `data-html-while-target-shown`'
     equal @$trigger.text(), 'Hide Thing', msg
     equal @$otherTrigger.text(), 'while shown', msg
@@ -131,3 +130,13 @@ require [
 
     @$trigger.prop('checked', false).trigger('change')
     ok @$target.is(':hidden'), "target is hidden"
+
+  test 'toggles multiple elements separated by spaces', ->
+    @$trigger = $('<input type="checkbox" class="element_toggler" aria-controls="one two" />').appendTo('body')
+    @$target1 = $('<div id="one" style="display: none;">one</div>').appendTo('body')
+    @$target2 = $('<div id="two" style="display: none;">two</div>').appendTo('body')
+    @$trigger.prop('checked', true).trigger('change')
+
+
+    ok @$target1.is(':visible'), 'first target is shown'
+    ok @$target2.is(':visible'), 'second target is shown'

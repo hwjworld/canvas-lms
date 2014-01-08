@@ -5,6 +5,24 @@ require File.expand_path(File.dirname(__FILE__) + "/common")
 describe "jquery ui" do
   it_should_behave_like "in-process server selenium tests"
 
+  def active
+    driver.switch_to.active_element
+  end
+  def shift_tab
+    driver.action.key_down(:shift)
+      .send_keys(:tab)
+      .key_up(:shift)
+      .perform
+  end
+  def create_simple_modal
+    driver.execute_script(<<-JS)
+      return $('<div><select /><input /></div>')
+        .dialog()
+        .find('select')
+        .focus()
+    JS
+  end
+
   before (:each) do
     course_with_teacher_logged_in
     get "/"
@@ -26,21 +44,43 @@ describe "jquery ui" do
     JS
     f(".ui-widget-overlay").should be_displayed
   end
+
+  it "should capture tabbing" do
+    create_simple_modal
+    active.tag_name.should == 'select'
+    active.send_keys(:tab)
+    active.tag_name.should == 'input'
+    active.send_keys(:tab)
+    active.tag_name.should == 'a'
+    active.send_keys(:tab)
+    active.tag_name.should == 'select'
+  end
+
+  it "should capture shift-tabbing" do
+    create_simple_modal
+    active.tag_name.should == 'select'
+    shift_tab
+    active.tag_name.should == 'a'
+    shift_tab
+    active.tag_name.should == 'input'
+    shift_tab
+    active.tag_name.should == 'select'
+  end
   
   context "calendar widget" do
     it "should let you replace content by selecting and typing instead of appending" do
       get "/courses/#{@course.id}/assignments"
       
       f(".add_assignment_link").click
-      wait_for_animations
+      wait_for_ajaximations
       f(".ui-datepicker-trigger").click
-      wait_for_animations
+      wait_for_ajaximations
       f(".ui-datepicker-time-hour").send_keys("12")
       f(".ui-datepicker-time-minute").send_keys("00")
       f(".ui-datepicker-ok").click
       
       f(".ui-datepicker-trigger").click
-      wait_for_animations
+      wait_for_ajaximations
       
       driver.execute_script("$('#ui-datepicker-time-hour').select();")
       f("#ui-datepicker-time-hour").send_keys('5')
@@ -127,6 +167,39 @@ describe "jquery ui" do
           .find('.ui-dialog-title')
           .html();
       JS
+    end
+  end
+
+  context 'admin-links' do
+    before do
+      driver.execute_script(<<-JS)
+        $('<div class="al-selenium">\
+            <a class="al-trigger btn" role="button" aria-haspopup="true" aria-owns="toolbar-1" href="#">\
+              <i class="icon-settings"></i>\
+              <i class="icon-mini-arrow-down"></i>\
+              <span class="screenreader-only">Settings</span>\
+            </a>\
+            <ul id="toolbar-1" class="al-options" role="menu" tabindex="0" aria-hidden="true" aria-expanded="false" aria-activedescendant="toolbar-2">\
+              <li role="presentation">\
+                <a href="#" class="icon-edit" id="toolbar-2" tabindex="-1" role="menuitem">Edit</a>\
+              </li>\
+            </ul>\
+          </div>').appendTo($('body')).find('.al-trigger').focus();
+      JS
+    end
+
+    def options
+      fj('.al-selenium .al-options:visible')
+    end
+
+    it "should open every time when pressing return" do
+      options.should be_nil
+      active.send_keys(:return)
+      options.should_not be_nil
+      f('.al-selenium .al-trigger').click
+      options.should be_nil
+      active.send_keys(:return)
+      options.should_not be_nil
     end
   end
 end

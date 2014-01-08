@@ -1,7 +1,5 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
-shared_examples_for "discussions selenium tests" do
-  it_should_behave_like "in-process server selenium tests"
 
   def go_to_topic
     get "/courses/#{@course.id}/discussion_topics/#{@topic.id}"
@@ -11,8 +9,7 @@ shared_examples_for "discussions selenium tests" do
   def create_and_go_to_topic(title = 'new topic', discussion_type = 'side_comment', is_locked = false)
     @topic = @course.discussion_topics.create!(:title => title, :discussion_type => discussion_type)
     if is_locked
-      @topic.workflow_state = 'locked'
-      @topic.save!
+      @topic.lock
       @topic.reload
     end
     go_to_topic
@@ -52,7 +49,7 @@ shared_examples_for "discussions selenium tests" do
 
   def add_reply(message = 'message!', attachment = nil)
     @last_entry ||= f('#discussion_topic')
-    @last_entry.find_element(:css, '.discussion-reply-label').click
+    @last_entry.find_element(:css, '.discussion-reply-action').click
     wait_for_ajaximations
     type_in_tiny 'textarea', message
 
@@ -98,4 +95,3 @@ shared_examples_for "discussions selenium tests" do
     fj(menu_item_selector).click
     topic
   end
-end

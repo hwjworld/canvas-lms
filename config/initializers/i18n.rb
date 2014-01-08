@@ -1,14 +1,17 @@
-I18n.load_path += Dir[Rails.root.join('config', 'locales', '**', '*.{rb,yml}')] +
-                  Dir[Rails.root.join('vendor', 'plugins', '*', 'config', 'locales', '**', '*.{rb,yml}')]
-I18n.load_path -= Dir[Rails.root.join('config', 'locales', 'generated', '**', '*.{rb,yml}')]
-I18n::Backend::Simple.send(:include, I18n::Backend::Fallbacks)
-
-Gem.loaded_specs.values.each do |spec|
-  path = spec.full_gem_path
-  translations_path = File.expand_path(File.join(path, 'config', 'locales'))
-  next unless File.directory?(translations_path)
-  I18n.load_path += Dir[File.join(translations_path, '**', '*.{rb,yml}')]
+# loading all the locales has a significant (>30%) impact on the speed of initializing canvas
+# so we skip it in situations where we don't need the locales, such as in development mode and in rails console
+skip_locale_loading = (Rails.env.development? || Rails.env.test? || $0 == 'irb') && !ENV['RAILS_LOAD_ALL_LOCALES']
+if skip_locale_loading
+  I18n.load_path = I18n.load_path.grep(%r{/(locales|en)\.yml\z})
 end
+
+I18n.backend = I18nema::Backend.new
+I18nema::Backend.send(:include, I18n::Backend::Fallbacks)
+I18n.backend.init_translations
+
+I18n.enforce_available_locales = true
+
+I18n.send :extend, I18n::Lolcalize if ENV['LOLCALIZE']
 
 module I18nUtilities
   def before_label(text_or_key, default_value = nil, *args)
@@ -154,7 +157,7 @@ I18n.class_eval do
   def self.apply_wrappers(string, wrappers)
     string = ERB::Util.h(string) unless string.html_safe?
     wrappers = { '*' => wrappers } unless wrappers.is_a?(Hash)
-    wrappers.sort { |a, b| -(a.first.length <=> b.first.length) }.each do |sym, replace|
+    wrappers.sort_by { |a| -a.first.length }.each do |sym, replace|
       regex = (WRAPPER_REGEXES[sym] ||= %r{#{Regexp.escape(sym)}([^#{Regexp.escape(sym)}]*)#{Regexp.escape(sym)}})
       string = string.gsub(regex, replace)
     end
@@ -162,11 +165,34 @@ I18n.class_eval do
   end
 end
 
-ActionView::Base.class_eval do
-  def i18n_scope
-    "#{template.base_path}.#{template.name.sub(/\A_/, '')}"
+if CANVAS_RAILS2
+  ActionView::Base.class_eval do
+    def i18n_scope
+      "#{template.base_path}.#{template.name.sub(/\A_/, '')}"
+    end
+  end
+else
+  ActionView::LookupContext.class_eval do
+    attr_accessor :i18n_scope
   end
 
+  ActionView::TemplateRenderer.class_eval do
+    def render_template_with_assign(template, *a)
+      old_i18n_scope = @lookup_context.i18n_scope
+      @lookup_context.i18n_scope = @current_template.virtual_path.sub(/\/_/, '/').gsub('/', '.')
+      _render_template_without_assign(template, *a)
+    ensure
+      @lookup_context.i18n_scope = old_i18n_scope
+    end
+    alias_method_chain :render_template, :assign
+  end
+
+  ActionView::Base.class_eval do
+    delegate :i18n_scope, :to => :lookup_context
+  end
+end
+
+ActionView::Base.class_eval do
   def translate(key, default, options = {})
     key = key.to_s
     key = "#{i18n_scope}.#{key}" unless key.sub!(/\A#/, '')
@@ -201,6 +227,12 @@ ActiveRecord::Base.class_eval do
     end
     alias :t :translate
 
+    # so that we don't load up the locales until we need them
+    LOCALE_LIST = []
+    def LOCALE_LIST.include?(item)
+      I18n.available_locales.map(&:to_s).include?(item)
+    end
+
     def validates_locale(*args)
       options = args.last.is_a?(Hash) ? args.pop : {}
       args << :locale if args.empty?
@@ -212,7 +244,7 @@ ActiveRecord::Base.class_eval do
         end
       end
       args.each do |field|
-        validates_inclusion_of field, options.merge(:in => I18n.available_locales.map(&:to_s))
+        validates_inclusion_of field, options.merge(:in => LOCALE_LIST)
       end
     end
   end
@@ -227,7 +259,9 @@ ActionMailer::Base.class_eval do
   alias :t :translate
 end
 
-ActiveSupport::CoreExtensions::Array::Conversions.class_eval do
+require 'active_support/core_ext/array/conversions'
+
+class Array
   def to_sentence_with_simple_or(options = {})
     if options == :or
       to_sentence_without_simple_or(:two_words_connector => I18n.t('support.array.or.two_words_connector'),

@@ -14,11 +14,11 @@ describe "assignment groups" do
   it "should create an assignment group" do
     get "/courses/#{@course.id}/assignments"
 
-    wait_for_animations
+    wait_for_ajaximations
     f('#right-side .add_group_link').click
     f('#assignment_group_name').send_keys('test group')
     submit_form('#add_group_form')
-    wait_for_animations
+    wait_for_ajaximations
     f('#add_group_form').should_not be_displayed
     f('#groups .assignment_group').should include_text('test group')
   end
@@ -43,7 +43,7 @@ describe "assignment groups" do
     f('.add_rule_link').click
     never_drop_css = '.form_rules div:nth-child(3) select'
     click_option(never_drop_css, 'Never Drop')
-    wait_for_animations
+    wait_for_ajaximations
     assignment_css = '.form_rules div:nth-child(3) .never_drop_assignment select'
     keep_trying_until { f(assignment_css).displayed? }
     click_option(assignment_css, assignment.title)
@@ -67,7 +67,7 @@ describe "assignment groups" do
     # the input
     f('input.weight').clear
     #need to wait for the total to update
-    wait_for_animations
+    wait_for_ajaximations
     keep_trying_until { fj('#group_weight_total').text.should == '50%' }
   end
 
@@ -108,14 +108,12 @@ describe "assignment groups" do
   end
 
   it "should not allow all assignment groups to be deleted" do
-    pending("bug 7480 - User should not be permitted to delete all assignment groups") do
       get "/courses/#{@course.id}/assignments"
       assignment_groups = get_assignment_groups
       assignment_groups.count.should == 1
       assignment_groups[0].find_element(:css, '.delete_group_link').should_not be_displayed
       refresh_page #refresh page to make sure the trashcan doesn't come back
       get_assignment_groups[0].find_element(:css, '.delete_group_link').should_not be_displayed
-    end
   end
 
   it "should add multiple assignment groups and not allow the last one to be deleted" do
@@ -138,5 +136,84 @@ describe "assignment groups" do
       refresh_page ##refresh page to make sure the trashcan doesn't come back
       get_assignment_groups[0].find_element(:css, '.delete_group_link').should_not be_displayed
     end
+  end
+
+  context "draft state" do
+    before do
+      @domain_root_account = Account.default
+      @domain_root_account.enable_feature!(:draft_state)
+
+      course_with_teacher_logged_in(:active_all => true)
+      @assignment_group = @course.assignment_groups.create!(:name => "Test Group")
+      @course.assignments.create(:name => "test", :assignment_group => @assignment_group)
+    end
+
+    #This feels like it would be better suited here than in QUnit
+    it "should not remove new assignments when editing a group" do
+      get "/courses/#{@course.id}/assignments"
+      wait_for_ajaximations
+      ag = @course.assignment_groups.first
+
+      f("#assignment_group_#{ag.id} .add_assignment").click
+      wait_for_animations
+
+      replace_content(f("#ag_#{ag.id}_assignment_name"), "Disappear")
+      fj('.create_assignment:visible').click
+      wait_for_ajaximations
+
+      fj("#assignment_group_#{ag.id} .assignment:eq(1) .ig-title").text.should match "Disappear"
+
+      f("#assignment_group_#{ag.id} .al-trigger").click
+      f("#assignment_group_#{ag.id} .edit_group").click
+      wait_for_ajaximations
+
+      replace_content(f("#ag_#{ag.id}_name"), "Modified Group")
+      fj('.create_group:visible').click
+      wait_for_ajaximations
+
+      fj("#assignment_group_#{ag.id} .assignment:eq(1) .ig-title").text.should match "Disappear"
+    end
+
+    #Because of the way this feature was made, i recommend we keep this one
+    it "should move assignments to another assignment group" do
+      before_count = @assignment_group.assignments.count
+      @ag2 = @course.assignment_groups.create!(:name => "2nd Group")
+      @assignment = @course.assignments.create(:name => "Test assignment", :assignment_group => @ag2)
+      get "/courses/#{@course.id}/assignments"
+      wait_for_ajaximations
+
+      f("#assignment_group_#{@ag2.id} .al-trigger").click
+      f("#assignment_group_#{@ag2.id} .delete_group").click
+      wait_for_ajaximations
+
+      fj('.assignment_group_move:visible').click
+      click_option('.group_select:visible', @assignment_group.id.to_s, :value)
+
+      fj('.delete_group:visible').click
+      wait_for_ajaximations
+
+      # two id selectors to make sure it moved
+      fj("#assignment_group_#{@assignment_group.id} #assignment_#{@assignment.id}").should_not be_nil
+
+      @assignment.reload
+      @assignment.assignment_group.should == @assignment_group
+    end
+
+    it "should reorder assignment groups with drag and drop" do
+      ags = [@assignment_group]
+      4.times do |i|
+        ags << @course.assignment_groups.create!(:name => "group_#{i}")
+      end
+      ags.collect(&:position).should == [1,2,3,4,5]
+
+      get "/courses/#{@course.id}/assignments"
+      wait_for_ajaximations
+      drag_with_js("#assignment_group_#{ags[1].id} .sortable-handle", 0, 100)
+      wait_for_ajaximations
+
+      ags.each {|ag| ag.reload}
+      ags.collect(&:position).should == [1,3,2,4,5]
+    end
+
   end
 end

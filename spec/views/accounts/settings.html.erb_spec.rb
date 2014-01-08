@@ -108,4 +108,46 @@ describe "accounts/settings.html.erb" do
       response.should_not have_tag("input#account_settings_enable_profiles")
     end
   end
+  
+  describe "quotas" do
+    before do
+      @account = Account.default
+      assigns[:account] = @account
+      assigns[:account_users] = []
+      assigns[:root_account] = @account
+      assigns[:associated_courses_count] = 0
+      assigns[:announcements] = []
+    end
+    
+    context "with :manage_storage_quotas" do
+      before do
+        admin = account_admin_user
+        view_context(@account, admin)
+        assigns[:current_user] = admin
+      end
+      
+      it "should show quota options" do
+        render
+        @controller.js_env.include?(:ACCOUNT).should be_true
+        response.should have_tag '#tab-quotas-link'
+        response.should have_tag '#tab-quotas'
+      end
+    end
+    
+    context "without :manage_storage_quotas" do
+      before do
+        admin = account_admin_user_with_role_changes(:account => @account, :role_changes => {'manage_storage_quotas' => false})
+        view_context(@account, admin)
+        assigns[:current_user] = admin
+      end
+      
+      it "should not show quota options" do
+        render
+        @controller.js_env.include?(:ACCOUNT).should be_false
+        response.should_not have_tag '#tab-quotas-link'
+        response.should_not have_tag '#tab-quotas'
+      end
+    end
+  end
+  
 end

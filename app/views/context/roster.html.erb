@@ -3,27 +3,17 @@
   @active_tab = 'people'
   translated_title = @context.is_a?(Course) ? t('titles.course_roster', 'Course Roster') : t('titles.group_roster', 'Group Roster')
 
-  join_title(translated_title, @context.name)
+  content_for :page_title, join_title(translated_title, @context.name)
 %>
+
+<h1 class='screenreader-only'><%= t('#titles.people', 'People') %></h1>
 
 <% content_for :right_side, render(:partial => 'context/roster_right_side') %>
 
+<%= jammit_css :roster %>
+
 <% if @context.is_a?(Course) %>
-  <div class="roster">
-    <div class="users-column-wrapper student_roster">
-    </div>
-    <div class="users-column-wrapper teacher_roster">
-    </div>
-  </div>
-
-  <% if @display_rosters.any? %>
-    <% jammit_css :roster %>
-    <% js_env :COURSE_ROSTERS => @display_rosters %>
-    <% js_bundle :roster %>
-  <% else %>
-    <%= t('roster.empty', 'No one is currently enrolled in this course.') %>
-  <% end %>
-
+  <% js_bundle :roster %>
 <% else %>
   <% content_for :stylesheets do %>
     <style>

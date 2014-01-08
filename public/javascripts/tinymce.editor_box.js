@@ -113,7 +113,7 @@ define([
     if(width == 0) {
       width = $textarea.closest(":visible").width();
     }
-    var instructure_buttons = ",instructure_embed,instructure_equation";
+    var instructure_buttons = ",instructure_image,instructure_equation";
     for(var idx in INST.editorButtons) {
       // maxVisibleEditorButtons should be the max number of external tool buttons
       // that are visible, INCLUDING the catchall "more external tools" button that
@@ -130,16 +130,16 @@ define([
     var equella_button = INST && INST.equellaEnabled ? ",instructure_equella" : "";
     instructure_buttons = instructure_buttons + equella_button;
 
-    var buttons1 = "bold,italic,underline,forecolor,backcolor,removeformat,justifyleft,justifycenter,justifyright,bullist,outdent,indent,numlist,table,instructure_links,unlink" + instructure_buttons + ",fontsizeselect,formatselect";
+    var buttons1 = "bold,italic,underline,forecolor,backcolor,removeformat,justifyleft,justifycenter,justifyright,bullist,outdent,indent,sup,sub,numlist,table,instructure_links,unlink" + instructure_buttons + ",fontsizeselect,formatselect";
     var buttons2 = "";
     var buttons3 = "";
 
     if (width < 359 && width > 0) {
       buttons1 = "bold,italic,underline,forecolor,backcolor,removeformat,justifyleft,justifycenter,justifyright";
-      buttons2 = "outdent,indent,bullist,numlist,table,instructure_links,unlink" + instructure_buttons;
+      buttons2 = "outdent,indent,sup,sub,bullist,numlist,table,instructure_links,unlink" + instructure_buttons;
       buttons3 = "fontsizeselect,formatselect";
     } else if (width < 600) {
-      buttons1 = "bold,italic,underline,forecolor,backcolor,removeformat,justifyleft,justifycenter,justifyright,outdent,indent,bullist,numlist";
+      buttons1 = "bold,italic,underline,forecolor,backcolor,removeformat,justifyleft,justifycenter,justifyright,outdent,indent,sup,sub,bullist,numlist";
       buttons2 = "table,instructure_links,unlink" + instructure_buttons + ",fontsizeselect,formatselect";
     }
 
@@ -150,7 +150,7 @@ define([
       elements: id,
       theme : "advanced",
       plugins: "autolink,instructure_external_tools,instructure_contextmenu,instructure_links," +
-               "instructure_embed,instructure_equation,instructure_record,instructure_equella," +
+               "instructure_embed,instructure_image,instructure_equation,instructure_record,instructure_equella," +
                "media,paste,table,inlinepopups",
       dialog_type: 'modal',
       language_load: false,
@@ -361,6 +361,8 @@ define([
         return $.fn._execCommand.apply(this, arr);
       } else if(options == "destroy") {
         this._removeEditor(more_options);
+      } else if(options == "is_dirty") {
+        return $instructureEditorBoxList._getEditor(id).isDirty();
       }
       return this;
     }

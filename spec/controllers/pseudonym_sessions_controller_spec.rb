@@ -33,6 +33,7 @@ describe PseudonymSessionsController do
 
     def confirm_mobile_layout
       mobile_agents.each do |agent|
+        controller.js_env.clear
         request.env['HTTP_USER_AGENT'] = agent
         yield
         response.should render_template("pseudonym_sessions/mobile_login")
@@ -78,6 +79,16 @@ describe PseudonymSessionsController do
   it "password auth should work" do
     user_with_pseudonym(:username => 'jt@instructure.com', :active_all => 1, :password => 'qwerty')
     post 'create', :pseudonym_session => { :unique_id => 'jt@instructure.com', :password => 'qwerty'}
+    response.should be_redirect
+    response.should redirect_to(dashboard_url(:login_success => 1))
+    assigns[:user].should == @user
+    assigns[:pseudonym].should == @pseudonym
+    assigns[:pseudonym_session].should_not be_nil
+  end
+
+  it "password auth should work with extra whitespace around unique id " do
+    user_with_pseudonym(:username => 'jt@instructure.com', :active_all => 1, :password => 'qwerty')
+    post 'create', :pseudonym_session => { :unique_id => ' jt@instructure.com ', :password => 'qwerty'}
     response.should be_redirect
     response.should redirect_to(dashboard_url(:login_success => 1))
     assigns[:user].should == @user
@@ -163,7 +174,7 @@ describe PseudonymSessionsController do
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should login for a user from a different shard" do
         user_with_pseudonym(:username => 'jt@instructure.com', :active_all => 1, :password => 'qwerty', :account => Account.site_admin)
@@ -237,6 +248,44 @@ describe PseudonymSessionsController do
       Pseudonym.find(session[:pseudonym_credentials_id]).should == user2.pseudonyms.first
 
       Setting.set_config("saml", nil)
+    end
+
+    context "multiple authorization configs" do
+      before do
+        @account = Account.create!
+        @unique_id = 'foo@example.com'
+        @user1 = user_with_pseudonym(:active_all => true, :username => @unique_id, :account => @account)
+        aac1 = Account.default.account_authorization_configs.create!(:auth_type => 'ldap', :identifier_format => 'uid')
+        @account.account_authorization_configs << aac1
+
+        aac2 = AccountAuthorizationConfig.new
+        aac2.auth_type = "saml"
+        aac2.idp_entity_id = "https://example.com/idp1"
+        aac2.log_out_url = "https://example.com/idp1/slo"
+        @account.account_authorization_configs << aac2
+
+        @stub_hash = {:issuer => aac2.idp_entity_id, :is_valid? => true, :success_status? => true, :name_id => @unique_id, :name_qualifier => nil, :session_index => nil, :process => nil}
+      end
+
+      it "should saml_consume login with multiple authorization configs" do
+        controller.stubs(:saml_response).returns(
+            stub('response', @stub_hash)
+        )
+        controller.request.env['canvas.domain_root_account'] = @account
+        get 'saml_consume', :SAMLResponse => "foo", :RelayState => "/courses"
+        response.should redirect_to(courses_url)
+        session[:saml_unique_id].should == @unique_id
+      end
+
+      it "should saml_logout with multiple authorization configs" do
+        controller.stubs(:saml_logout_response).returns(
+            stub('response', @stub_hash)
+        )
+        controller.request.env['canvas.domain_root_account'] = @account
+        get 'saml_logout', :SAMLResponse => "foo", :RelayState => "/courses"
+
+        response.should redirect_to(:action => :destroy)
+      end
     end
 
     context "multiple SAML configs" do
@@ -647,7 +696,7 @@ describe PseudonymSessionsController do
       controller.request.env['canvas.domain_root_account'] = account1
       get 'new', :ticket => 'ST-abcd'
       response.should redirect_to(dashboard_url(:login_success => 1))
-      session[:cas_login].should == true
+      session[:cas_session].should == 'ST-abcd'
       Pseudonym.find(session[:pseudonym_credentials_id]).should == user1.pseudonyms.first
 
       (controller.instance_variables.grep(/@[^_]/) - ['@mock_proxy']).each{ |var| controller.send :remove_instance_variable, var }
@@ -658,7 +707,7 @@ describe PseudonymSessionsController do
       controller.request.env['canvas.domain_root_account'] = account2
       get 'new', :ticket => 'ST-efgh'
       response.should redirect_to(dashboard_url(:login_success => 1))
-      session[:cas_login].should == true
+      session[:cas_session].should == 'ST-efgh'
       Pseudonym.find(session[:pseudonym_credentials_id]).should == user2.pseudonyms.first
     end
   end
@@ -770,14 +819,16 @@ describe PseudonymSessionsController do
 
         @user.otp_secret_key = ROTP::Base32.random_base32
         @user.save!
-        user_session(@user)
+        user_session(@user, @pseudonym)
         session[:pending_otp] = true
       end
 
       it "should verify a code" do
-        post 'otp_login', :otp_login => { :verification_code => ROTP::TOTP.new(@user.otp_secret_key).now }
+        code = ROTP::TOTP.new(@user.otp_secret_key).now
+        post 'otp_login', :otp_login => { :verification_code => code }
         response.should redirect_to dashboard_url(:login_success => 1)
         cookies['canvas_otp_remember_me'].should be_nil
+        Canvas.redis.get("otp_used:#{code}").should == '1' if Canvas.redis_enabled?
       end
 
       it "should set a cookie" do
@@ -807,11 +858,21 @@ describe PseudonymSessionsController do
         response.should render_template('otp_login')
         assigns[:cc].should == cc
       end
+
+      it "should not allow the same code to be used multiple times" do
+        pending "needs redis" unless Canvas.redis_enabled?
+
+        Canvas.redis.set("otp_used:123456", '1')
+        ROTP::TOTP.any_instance.expects(:verify_with_drift).never
+        post 'otp_login', :otp_login => { :verification_code => '123456' }
+        response.should render_template('otp_login')
+
+      end
     end
 
     context "enrollment" do
       before do
-        user_session(@user)
+        user_session(@user, @pseudonym)
       end
 
       it "should generate a secret key" do
@@ -1072,7 +1133,7 @@ describe PseudonymSessionsController do
     before { user_session user }
 
     it 'uses the global id of the user for generating the code' do
-      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => nil, :remember_access => nil}).returns('code')
+      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => nil, :remember_access => nil, :purpose => nil}).returns('code')
       oauth_accept
       response.should redirect_to(oauth2_auth_url(:code => 'code'))
     end
@@ -1080,20 +1141,27 @@ describe PseudonymSessionsController do
     it 'saves the requested scopes with the code' do
       scopes = 'userinfo'
       session_hash[:oauth2][:scopes] = scopes
-      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => scopes, :remember_access => nil}).returns('code')
+      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => scopes, :remember_access => nil, :purpose => nil}).returns('code')
       oauth_accept
     end
 
     it 'remembers the users access preference with the code' do
-      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => nil, :remember_access => '1'}).returns('code')
+      Canvas::Oauth::Token.expects(:generate_code_for).with(user.global_id, key.id, {:scopes => nil, :remember_access => '1', :purpose => nil}).returns('code')
       post :oauth2_accept, {:remember_access => '1'}, session_hash
     end
 
     it 'removes oauth session info after code generation' do
       Canvas::Oauth::Token.stubs(:generate_code_for => 'code')
       oauth_accept
-      controller.session.should == {}
+      controller.session[:oauth2].should be_nil
     end
-  end
 
+    it 'forwards the oauth state if it was provided' do
+      session_hash[:oauth2][:state] = '1234567890'
+      Canvas::Oauth::Token.stubs(:generate_code_for => 'code')
+      oauth_accept
+      response.should redirect_to(oauth2_auth_url(:code => 'code', :state => '1234567890'))
+    end
+
+  end
 end

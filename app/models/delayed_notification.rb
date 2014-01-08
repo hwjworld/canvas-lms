@@ -23,6 +23,7 @@ class DelayedNotification < ActiveRecord::Base
   belongs_to :asset_context, :polymorphic => true
   attr_accessible :asset, :notification, :recipient_keys, :asset_context, :data
   attr_accessor :data
+  validates_presence_of :notification_id, :asset_id, :asset_type, :workflow_state
   
   serialize :recipient_keys
   
@@ -58,6 +59,7 @@ class DelayedNotification < ActiveRecord::Base
   end
   
   def to_list
+    return @to_list if @to_list
     lookups = {}
     (recipient_keys || []).each do |key|
       pieces = key.split('_')
@@ -70,13 +72,12 @@ class DelayedNotification < ActiveRecord::Base
     lookups.each do |klass, ids|
       includes = []
       includes = [:user] if klass == CommunicationChannel
-      res += klass.find(:all, :conditions => {:id => ids}, :include => includes) rescue []
+      res += klass.where(:id => ids).includes(includes).all rescue []
     end
-    res.uniq
+    @to_list = res.uniq
   end
-  memoize :to_list
-  
-  named_scope :to_be_processed, lambda {|limit|
-    {:conditions => ['delayed_notifications.workflow_state = ?', 'to_be_processed'], :limit => limit, :order => 'delayed_notifications.created_at'}
+
+  scope :to_be_processed, lambda { |limit|
+    where(:workflow_state => 'to_be_processed').limit(limit).order("delayed_notifications.created_at")
   }
 end

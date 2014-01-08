@@ -18,7 +18,11 @@
 
 class Message < ActiveRecord::Base
   # Included modules
-  include ActionController::UrlWriter
+  if CANVAS_RAILS2
+    include ActionController::UrlWriter
+  else
+    include Rails.application.routes.url_helpers
+  end
   include ERB::Util
   include SendToStream
   include TextHelper
@@ -37,7 +41,7 @@ class Message < ActiveRecord::Base
 
   attr_accessible :to, :from, :subject, :body, :delay_for, :context, :path_type,
     :from_name, :sent_at, :notification, :user, :communication_channel,
-    :notification_name, :asset_context, :data
+    :notification_name, :asset_context, :data, :root_account_id
 
   attr_writer :delayed_messages
 
@@ -121,64 +125,39 @@ class Message < ActiveRecord::Base
   end
 
   # Named scopes
-  named_scope :for_asset_context_codes, lambda { |context_codes|
-    { :conditions => { :asset_context_code => context_codes } }
+  scope :for_asset_context_codes, lambda { |context_codes| where(:asset_context_code => context_codes) }
+
+  scope :for, lambda { |context| where(:context_type => context.class.base_ar_class.to_s, :context_id => context) }
+
+  scope :after, lambda { |date| where("messages.created_at>?", date) }
+
+  scope :to_dispatch, lambda {
+    where("messages.workflow_state='staged' AND messages.dispatch_at<=? AND 'messages.to'<>'dashboard'", Time.now.utc)
   }
 
-  named_scope :for, lambda { |context|
-    { :conditions => ['messages.context_type = ? and messages.context_id = ?',
-      context.class.base_ar_class.to_s, context.id] }
-  }
+  scope :to_email, where(:path_type => ['email', 'sms'])
 
-  named_scope :after, lambda { |date|
-    { :conditions => ['messages.created_at > ?', date] }
-  }
+  scope :to_facebook, where(:path_type => 'facebook', :workflow_state => 'sent').order("sent_at DESC").limit(25)
 
-  named_scope :to_dispatch, lambda {
-    { :conditions => ["messages.workflow_state = ? and messages.dispatch_at <= ? and 'messages.to' != ?",
-      'staged', Time.now.utc, 'dashboard'] }
-  }
+  scope :not_to_email, where("messages.path_type NOT IN ('email', 'sms')")
 
-  named_scope :to_email, { :conditions =>
-    ['messages.path_type = ? OR messages.path_type = ?', 'email', 'sms'] }
+  scope :by_name, lambda { |notification_name| where(:notification_name => notification_name) }
 
-  named_scope :to_facebook, { :conditions =>
-    ['messages.path_type = ? AND messages.workflow_state = ?',
-     'facebook', 'sent'], :order => 'sent_at DESC', :limit => 25 }
+  scope :before, lambda { |date| where("messages.created_at<?", date) }
 
-  named_scope :not_to_email, { :conditions => 
-    ['messages.path_type != ? AND messages.path_type != ?', 'email', 'sms'] }
-
-  named_scope :by_name, lambda { |notification_name|
-    { :conditions => ['messages.notification_name = ?', notification_name] }
-  }
-
-  named_scope :before, lambda { |date|
-    { :conditions => ['messages.created_at < ?', date] }
-  }
-
-  named_scope :for_user, lambda { |user|
-    { :conditions => {:user_id => user} }
-  }
+  scope :for_user, lambda { |user| where(:user_id => user)}
 
   # messages that can be moved to the 'cancelled' state. dashboard messages
   # can be closed by calling 'cancel', but aren't included
-  named_scope :cancellable, { :conditions =>
-    { :workflow_state => ['created', 'staged', 'sending'] }
-  }
-  
+  scope :cancellable, where(:workflow_state => ['created', 'staged', 'sending'])
+
   # For finding a very particular message:
   # Message.for(context).by_name(name).directed_to(to).for_user(user), or
   # messages.for(context).by_name(name).directed_to(to).for_user(user)
   # Where user can be a User or id, name needs to be the Notification name.
-  named_scope :staged, lambda {
-    { :conditions => ['messages.workflow_state = ? and messages.dispatch_at > ?',
-      'staged', DateTime.now.utc.to_s(:db) ]}
-  }
+  scope :staged, lambda { where("messages.workflow_state='staged' AND messages.dispatch_at>?", Time.now.utc) }
 
-  named_scope :in_state, lambda { |state|
-    { :conditions => { :workflow_state => Array(state).map { |f| f.to_s } } }
-  }
+  scope :in_state, lambda { |state| where(:workflow_state => Array(state).map(&:to_s)) }
 
   # Public: Helper to generate a URI for the given subject. Overrides Rails'
   # built-in ActionController::PolymorphicRoutes#polymorphic_url method because
@@ -206,6 +185,13 @@ class Message < ActiveRecord::Base
   end
   alias_method_chain :polymorphic_url, :context_host
 
+  # the hostname for user-specific links (e.g. setting notification prefs).
+  # may be different from the asset/context host
+  def primary_host
+    primary_context = user.pseudonym.try(:account)
+    primary_context ||= context.respond_to?(:context) ? context.context : context
+    HostUrl.context_host primary_context
+  end
 
   # Internal: Store any transmission errors in the database to help with later
   # debugging.
@@ -248,12 +234,12 @@ class Message < ActiveRecord::Base
     stage if state == :created
 
     if dashboard?
-      messages = Message.in_state(:dashboard).scoped(:conditions => {
+      messages = Message.in_state(:dashboard).where(
         :notification_id => notification_id,
         :context_id => context_id,
         :context_type => context_type,
         :user_id => user_id
-      })
+      )
 
       (messages - [self]).each(&:close)
     end
@@ -324,31 +310,31 @@ class Message < ActiveRecord::Base
     self.notification.name.parameterize.underscore + "." + path_type + ".erb"
   end
 
-  # Public: Load an HTML email template for this message.
+  # Public: Apply an HTML email template to this message.
   #
   # _binding - The binding to attach to the template.
   #
-  # Returns a template string (or nil).
-  def load_html_template(_binding)
-    html_file   = template_filename('email.html')
-    html_path   = Canvas::MessageHelper.find_message_path(html_file)
+  # Returns an HTML template (or nil).
+  def apply_html_template(_binding)
+    orig_i18n_scope = @i18n_scope
+    @i18n_scope = "#{@i18n_scope}.html"
+    return nil unless template = load_html_template
 
-    if File.exist?(html_path)
-      html_layout do
-        Erubis::Eruby.new(File.read(html_path), :bufvar => '@output_buffer').result(_binding)
-      end
-    end
+    # Add the attribute 'inner_html' with the value of inner_html into the _binding
+    inner_html = RailsXss::Erubis.new(template, :bufvar => '@output_buffer').result(_binding)
+    setter = eval "inner_html = nil; lambda { |v| inner_html = v }", _binding
+    setter.call(inner_html)
+
+    layout_path = Canvas::MessageHelper.find_message_path('_layout.email.html.erb')
+    RailsXss::Erubis.new(File.read(layout_path)).result(_binding)
+  ensure
+    @i18n_scope = orig_i18n_scope
   end
 
-  # Public: Return the layout for HTML emails. We need this because
-  # Erubis::Eruby.new.result(binding) doesn't accept a block; by wrapping it
-  # in a method we can pass it a block to handle the <%= yield %> call in the
-  # layout.
-  #
-  # Returns an HTML string.
-  def html_layout
-    layout_path = Canvas::MessageHelper.find_message_path('_layout.email.html.erb')
-    Erubis::Eruby.new(File.read(layout_path)).result(binding)
+  def load_html_template
+    html_file = template_filename('email.html')
+    html_path = Canvas::MessageHelper.find_message_path(html_file)
+    File.read(html_path) if File.exist?(html_path)
   end
 
   # Public: Assign the body, subject and url to the message.
@@ -367,13 +353,13 @@ class Message < ActiveRecord::Base
     else
       self.body = Erubis::Eruby.new(message_body_template,
         :bufvar => '@output_buffer').result(_binding)
-      self.html_body = load_html_template(_binding) if path_type == 'email'
+      self.html_body = apply_html_template(_binding) if path_type == 'email'
     end
 
     # Append a footer to the body if the path type is email
     if path_type == 'email'
       raw_footer_message = File.read(Canvas::MessageHelper.find_message_path('_email_footer.email.erb'))
-      footer_message = Erubis::Eruby.new(raw_footer_message, :bufvar => "@output_buffer").result(b) rescue nil
+      footer_message = Erubis::Eruby.new(raw_footer_message, :bufvar => "@output_buffer").result(_binding)
       if footer_message.present?
         self.body = <<-END.strip_heredoc
           #{self.body}
@@ -481,7 +467,7 @@ class Message < ActiveRecord::Base
     end
 
     # not sure what this is even doing?
-    message_types.to_a.sort_by { |m| m[0] == 'Other' ? 'ZZZZ' : m[0] }
+    message_types.to_a.sort_by { |m| m[0] == 'Other' ? SortLast : m[0] }
   end
 
   # Public: Format and return the body for this message.
@@ -511,10 +497,10 @@ class Message < ActiveRecord::Base
     current_context                 = context
 
     until current_context.respond_to?(:root_account) do
+      return nil if unbounded_loop_paranoia_counter <= 0 || current_context.nil?
+      return nil unless current_context.respond_to?(:context)
       current_context = current_context.context
       unbounded_loop_paranoia_counter -= 1
-
-      return nil if unbounded_loop_paranoia_counter <= 0 || context.nil?
     end
 
     current_context.root_account
@@ -535,7 +521,10 @@ class Message < ActiveRecord::Base
 
     self.to_email  = true if %w[email sms].include?(path_type)
 
-    self.from_name = context_root_account.settings[:outgoing_email_default_name] rescue nil
+    root_account = context_root_account
+    self.root_account_id ||= root_account.try(:id)
+
+    self.from_name = root_account.settings[:outgoing_email_default_name] rescue nil
     self.from_name = HostUrl.outgoing_email_default_name if from_name.blank?
     self.from_name = asset_context.name if (asset_context &&
       !asset_context.is_a?(Account) && asset_context.name &&
@@ -599,6 +588,14 @@ class Message < ActiveRecord::Base
     nil
   end
 
+  # Public: Return the message as JSON filtered to selected fields and
+  # flattened appropriately.
+  #
+  # Returns json hash.
+  def as_json(options = {})
+    super(:only => [:id, :created_at, :sent_at, :workflow_state, :from, :to, :reply_to, :subject, :body, :html_body])['message']
+  end
+
   protected
   # Internal: Deliver the message through email.
   #
@@ -610,7 +607,7 @@ class Message < ActiveRecord::Base
     logger.info "Delivering mail: #{self.inspect}"
 
     begin
-      res = Mailer.deliver_message(self)
+      res = Mailer.message(self).deliver
     rescue Net::SMTPServerBusy => e
       @exception = e
       logger.error "Exception: #{e.class}: #{e.message}\n\t#{e.backtrace.join("\n\t")}"
@@ -649,6 +646,8 @@ class Message < ActiveRecord::Base
   def deliver_via_chat; end
 
   # Internal: Deliver the message through Twitter.
+  #
+  # The template should define the content for :link and not place into the body of the template itself
   #
   # Returns nothing.
   def deliver_via_twitter

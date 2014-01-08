@@ -1,6 +1,25 @@
 require File.expand_path(File.dirname(__FILE__) + '/helpers/gradebook2_common')
 describe "edititing grades" do
-  it_should_behave_like "gradebook2 selenium tests"
+  it_should_behave_like "in-process server selenium tests"
+
+  ASSIGNMENT_1_POINTS = "10"
+  ASSIGNMENT_2_POINTS = "5"
+  ASSIGNMENT_3_POINTS = "50"
+  ATTENDANCE_POINTS = "15"
+
+  STUDENT_NAME_1 = "student 1"
+  STUDENT_NAME_2 = "student 2"
+  STUDENT_NAME_3 = "student 3"
+  STUDENT_SORTABLE_NAME_1 = "1, student"
+  STUDENT_SORTABLE_NAME_2 = "2, student"
+  STUDENT_SORTABLE_NAME_3 = "3, student"
+  STUDENT_1_TOTAL_IGNORING_UNGRADED = "100%"
+  STUDENT_2_TOTAL_IGNORING_UNGRADED = "66.7%"
+  STUDENT_3_TOTAL_IGNORING_UNGRADED = "66.7%"
+  STUDENT_1_TOTAL_TREATING_UNGRADED_AS_ZEROS = "18.8%"
+  STUDENT_2_TOTAL_TREATING_UNGRADED_AS_ZEROS = "12.5%"
+  STUDENT_3_TOTAL_TREATING_UNGRADED_AS_ZEROS = "12.5%"
+  DEFAULT_PASSWORD = "qwerty"
 
   before (:each) do
     data_setup
@@ -9,13 +28,12 @@ describe "edititing grades" do
   it "should change grades and validate course total is correct" do
     expected_edited_total = "33.3%"
     get "/courses/#{@course.id}/gradebook2"
-    wait_for_ajaximations
 
     #editing grade for first row, first cell
-    edit_grade(f('#gradebook_grid [row="0"] .l0'), 0)
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(1) .l2', 0)
 
     #editing grade for second row, first cell
-    edit_grade(f('#gradebook_grid [row="1"] .l0'), 0)
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(2) .l2', 0)
 
     #refresh page and make sure the grade sticks
     get "/courses/#{@course.id}/gradebook2"
@@ -25,9 +43,9 @@ describe "edititing grades" do
 
     #go back to gradebook1 and compare to make sure they match
     check_gradebook_1_totals({
-                                 @student_1.id => expected_edited_total,
-                                 @student_2.id => expected_edited_total
-                             })
+       @student_1.id => expected_edited_total,
+       @student_2.id => expected_edited_total
+     })
   end
 
   it "should update a graded quiz and have the points carry over to the quiz attempts page" do
@@ -40,7 +58,7 @@ describe "edititing grades" do
 
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
-    edit_grade(f('#gradebook_grid [row="0"] .l3'), points.to_s)
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(1) .l5', points.to_s)
 
     get "/courses/#{@course.id}/quizzes/#{q.id}/history?quiz_submission_id=#{qs.id}"
     f('.score_value').text.should == points.to_s
@@ -90,9 +108,9 @@ describe "edititing grades" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
 
-    edit_grade(f('#gradebook_grid [row="0"] .l3'), 'A-')
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(1) .l5', 'A-')
     wait_for_ajax_requests
-    f('#gradebook_grid [row="0"] .l3').should include_text('A-')
+    f('#gradebook_grid .container_1 .slick-row:nth-child(1) .l5').should include_text('A-')
     @assignment.reload.submissions.size.should == 1
     sub = @assignment.submissions.first
     sub.grade.should == 'A-'
@@ -116,7 +134,7 @@ describe "edititing grades" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
 
-    first_cell = f('#gradebook_grid [row="0"] .l0')
+    first_cell = f('#gradebook_grid .container_1 .slick-row:nth-child(1) .l2')
     grade_input = keep_trying_until do
       first_cell.click
       first_cell.find_element(:css, '.grade')
@@ -124,7 +142,7 @@ describe "edititing grades" do
     set_value(grade_input, 3)
     grade_input.send_keys(:tab)
     wait_for_ajax_requests
-    f('#gradebook_grid [row="0"] .l1').should have_class('editable')
+    f('#gradebook_grid .container_1 .slick-row:nth-child(1) .l3').should have_class('editable')
   end
 
   it "should display dropped grades correctly after editing a grade" do
@@ -132,8 +150,8 @@ describe "edititing grades" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
 
-    assignment_1_sel = '#gradebook_grid [row="0"] .l1'
-    assignment_2_sel= '#gradebook_grid [row="0"] .l2'
+    assignment_1_sel = '#gradebook_grid .container_1 .slick-row:nth-child(1) .l3'
+    assignment_2_sel= '#gradebook_grid .container_1 .slick-row:nth-child(1) .l4'
     a1 = f(assignment_1_sel)
     a2 = f(assignment_2_sel)
     a1['class'].should include 'dropped'
@@ -154,7 +172,7 @@ describe "edititing grades" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
 
-    first_cell = f('#gradebook_grid [row="0"] .l0')
+    first_cell = f('#gradebook_grid .container_1 .slick-row:nth-child(1) .l2')
     grade_input = keep_trying_until do
       first_cell.click
       first_cell.find_element(:css, '.grade')
@@ -182,7 +200,7 @@ describe "edititing grades" do
       true
     end
     driver.switch_to.default_content
-    find_slick_cells(1, f('#gradebook_grid'))[0].text.should == curved_grade_text
+    find_slick_cells(1, f('#gradebook_grid .container_1'))[0].text.should == curved_grade_text
   end
 
   it "should optionally assign zeroes to unsubmitted assignments during curving" do
@@ -190,7 +208,7 @@ describe "edititing grades" do
 
     wait_for_ajaximations
 
-    edit_grade(f('#gradebook_grid [row="1"] .l0'), '')
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(2) .l2', '')
 
     open_assignment_options(0)
     f('[data-action="curveGrades"]').click
@@ -205,7 +223,7 @@ describe "edititing grades" do
     end
 
     driver.switch_to.default_content
-    find_slick_cells(1, f('#gradebook_grid'))[0].text.should == '0'
+    find_slick_cells(1, f('#gradebook_grid .container_1'))[0].text.should == '0'
   end
 
   it "should correctly set default grades for a specific section" do
@@ -218,7 +236,7 @@ describe "edititing grades" do
       end
 
       expected_grade = "45"
-      gradebook_row_1 = '#gradebook_grid [row="1"]'
+      gradebook_row_1 = '#gradebook_grid .container_1 .slick-row:nth-child(2)'
       get "/courses/#{@course.id}/gradebook2"
       wait_for_ajaximations
 
@@ -247,7 +265,7 @@ describe "edititing grades" do
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
     set_default_grade(2, expected_grade)
-    grade_grid = f('#gradebook_grid')
+    grade_grid = f('#gradebook_grid .container_1')
     StudentEnrollment.count.times do |n|
       find_slick_cells(n, grade_grid)[2].text.should == expected_grade
     end
@@ -257,9 +275,9 @@ describe "edititing grades" do
     SubmissionsApiController.any_instance.expects(:update).returns('bad response')
     get "/courses/#{@course.id}/gradebook2"
     wait_for_ajaximations
-    edit_grade(f('#gradebook_grid [row="0"] .l0'), 0)
+    edit_grade('#gradebook_grid .container_1 .slick-row:nth-child(1) .l2', 0)
     keep_trying_until do
-      f('.ui-state-error').text.should match(/refresh/)
+      flash_message_present?(:error, /refresh/).should be_true
     end
   end
 end

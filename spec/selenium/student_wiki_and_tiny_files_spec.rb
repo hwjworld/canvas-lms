@@ -1,7 +1,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/helpers/wiki_and_tiny_common')
 
 describe "Wiki pages and Tiny WYSIWYG editor Files" do
-  it_should_behave_like "wiki and tiny selenium tests"
+  it_should_behave_like "in-process server selenium tests"
 
   def add_file_to_rce
     wiki_page_tools_file_tree_setup
@@ -133,9 +133,11 @@ describe "Wiki pages and Tiny WYSIWYG editor Files" do
 
       get "/courses/#{@course.id}/discussion_topics/new"
       f('#editor_tabs .ui-tabs-nav li:nth-child(2) a').click
-      f('li.folder span').click
-      wait_for_ajaximations
-      ff('li.folder li.file').count.should == 1
+      keep_trying_until do
+        f('li.folder span').click
+        wait_for_ajaximations
+        ff('li.folder li.file').count.should == 1
+      end
       f('li.folder li.file .name').text.should == "foo.txt"
     end
   end

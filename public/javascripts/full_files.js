@@ -311,10 +311,15 @@ define([
         // what value is there in knowing the student looked at the file browser,
         // we just care if they access files.
       },
-      viewFile: function(context_string, id) {
+      viewInlinePingUrl: function(context_string, id) {
         var url = $("#file_context_links ." + context_string + "_inline_view_attachment_url").attr('href');
         url = $.replaceTags(url, 'id', id);
-        $.ajaxJSON(url, 'POST', {}, function() { }, function() { });
+        return url;
+      },
+      scribdRenderUrl: function(context_string, id) {
+          var url = $("#file_context_links ." + context_string + "_scribd_render_url").attr('href');
+          url = $.replaceTags(url, 'id', id);
+          return url;
       },
       selectFolder: function($original_node) {
         if(!files.selectFolder.forceRefresh && ($original_node.hasClass('active-node') || $original_node.hasClass('active-leaf'))) { return; }
@@ -1578,9 +1583,11 @@ define([
                       height: '100%',
                       crocodoc_session_url: data.crocodocSession,
                       scribd_doc_id: data.scribd_doc && data.scribd_doc.attributes && data.scribd_doc.attributes.doc_id,
-                      scribd_access_key: data.scribd_doc && data.scribd_doc.attributes && data.scribd_doc.attributes.access_key
+                      scribd_access_key: data.scribd_doc && data.scribd_doc.attributes && data.scribd_doc.attributes.access_key,
+                      attachment_view_inline_ping_url: files.viewInlinePingUrl(data.context_string, data.id),
+                      attachment_scribd_render_url: files.scribdRenderUrl(data.context_string, data.id),
+                      attachment_preview_processing: data.workflow_state == 'pending_upload' || data.workflow_state == 'processing'
                     });
-                    files.viewFile(data.context_string, data.id);
                   };
                   if (data.permissions && data.permissions.download && $.isPreviewable(data.content_type)) {
                     if (data['crocodoc_available?'] && !data.crocodocSession) {
@@ -1702,7 +1709,7 @@ define([
                     tinyOptions: {
                       valid_elements: '*[*]',
                       extended_valid_elements: '*[*]',
-                      plugins: "autolink,instructure_external_tools,instructure_contextmenu,instructure_links,instructure_embed,instructure_equation,instructure_equella,media,paste,table,inlinepopups"
+                      plugins: "autolink,instructure_external_tools,instructure_contextmenu,instructure_links,instructure_image,instructure_equation,instructure_equella,media,paste,table,inlinepopups"
                     }
                   });
                   $textarea.data('tinyIsVisible', !tinyIsVisible);
@@ -1885,8 +1892,7 @@ define([
         $form.find("form")
              .attr('action', $("#file_context_links ." + 
                                 itemData.context_string + 
-                                "_attachments_url").attr('href') + 
-                                ".text");
+                                "_attachments_url").attr('href'));
         $form.mouseover();
         $form.find(":text:first")
              .focus()
@@ -2032,7 +2038,7 @@ define([
           modal: true,
           width: 350,
           title: item_type == 'folder' ? I18n.t('titles.lock_folder', "Lock Folder") : I18n.t('titles.lock_file', 'Lock File')
-        });
+        }).find('.datetime_field').datetime_field();;
       });
 
       $("#folder_just_hide,#attachment_just_hide").change(function() {
@@ -2050,6 +2056,8 @@ define([
 
       $("#lock_attachment_form").formSubmit({
         processData: function(data) {
+          data['attachment[unlock_at]'] = $.datetime.process(data['attachment[unlock_at]']);
+          data['attachment[lock_at]'] = $.datetime.process(data['attachment[lock_at]']);
           return data;
         },
         beforeSubmit: function(data) {
@@ -2064,6 +2072,8 @@ define([
 
       $("#lock_folder_form").formSubmit({
         processData: function(data) {
+          data['folder[unlock_at]'] = $.datetime.process(data['folder[unlock_at]']);
+          data['folder[lock_at]'] = $.datetime.process(data['folder[lock_at]']);
           return data;
         },
         beforeSubmit: function(data) {

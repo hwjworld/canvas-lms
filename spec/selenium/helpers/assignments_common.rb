@@ -1,12 +1,11 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
-shared_examples_for "assignments selenium tests" do
-  it_should_behave_like "in-process server selenium tests"
+
 
   def build_assignment_with_type(type, opts={})
     driver.execute_script %{$('.header_content .add_assignment_link:first').addClass('focus');}
     f(".header_content .add_assignment_link").click
-    wait_for_animations
+    wait_for_ajaximations
 
     edit_assignment({:type => type}.merge(opts))
   end
@@ -31,4 +30,3 @@ shared_examples_for "assignments selenium tests" do
       wait_for_ajaximations
     end
   end
-end

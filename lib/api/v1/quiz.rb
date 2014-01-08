@@ -19,6 +19,7 @@
 module Api::V1::Quiz
   include Api::V1::Json
   include Api::V1::AssignmentOverride
+  include Api::V1::Locked
 
   API_ALLOWED_QUIZ_OUTPUT_FIELDS = {
     :only => %w(
@@ -31,9 +32,12 @@ module Api::V1::Quiz
       shuffle_answers
       hide_results
       show_correct_answers
+      show_correct_answers_at
+      hide_correct_answers_at
       scoring_policy
       allowed_attempts
       one_question_at_a_time
+      points_possible
       cant_go_back
       access_code
       ip_filter
@@ -53,6 +57,8 @@ module Api::V1::Quiz
       shuffle_answers
       hide_results
       show_correct_answers
+      show_correct_answers_at
+      hide_correct_answers_at
       scoring_policy
       allowed_attempts
       one_question_at_a_time
@@ -62,6 +68,7 @@ module Api::V1::Quiz
       due_at
       lock_at
       unlock_at
+      published
       )
   }
 
@@ -72,9 +79,18 @@ module Api::V1::Quiz
   end
 
   def quiz_json(quiz, context, user, session)
-    api_json(quiz, user, session, API_ALLOWED_QUIZ_OUTPUT_FIELDS).merge(
-      :html_url => polymorphic_url([context, quiz])
+    hash = api_json(quiz, user, session, API_ALLOWED_QUIZ_OUTPUT_FIELDS).merge(
+      :html_url => polymorphic_url([context, quiz]),
+      :mobile_url => polymorphic_url([context, quiz], :persist_headless => 1, :force_user => 1),
+      :question_count => quiz.available_question_count,
+      :published => quiz.published?
     )
+    hash.delete(:access_code) unless quiz.grants_right?(user, session, :grade)
+    if context.grants_right?(user, session, :manage_assignments)
+      hash[:unpublishable] = quiz.can_unpublish?
+    end
+    locked_json(hash, quiz, user, 'quiz', :context => context)
+    hash
   end
 
   def filter_params(quiz_params)
@@ -92,6 +108,17 @@ module Api::V1::Quiz
       update_params["assignment_group_id"] = ag.try(:id)
     end
 
+    # make sure allowed_attempts isn't set with a silly negative value
+    # (note that -1 is ok and it means unlimited attempts)
+    if update_params.has_key?('allowed_attempts')
+      allowed_attempts = update_params.fetch('allowed_attempts', quiz.allowed_attempts)
+      allowed_attempts = -1 if allowed_attempts.nil?
+
+      if allowed_attempts.to_i < -1
+        update_params.delete 'allowed_attempts'
+      end
+    end
+
     # hide_results="until_after_last_attempt" is valid if allowed_attempts > 1
     if update_params['hide_results'] == "until_after_last_attempt"
       allowed_attempts = update_params.fetch('allowed_attempts', quiz.allowed_attempts)
@@ -105,6 +132,14 @@ module Api::V1::Quiz
       hide_results = update_params.fetch('hide_results', quiz.hide_results)
       unless hide_results.blank?
         update_params.delete 'show_correct_answers'
+      end
+    end
+
+    # show_correct_answers_at and hide_correct_answers_at are valid only if
+    # show_correct_answers=true
+    unless update_params.fetch('show_correct_answers', quiz.show_correct_answers)
+      %w[ show_correct_answers_at hide_correct_answers_at ].each do |key|
+        update_params.delete(key) if update_params.has_key?(key)
       end
     end
 
@@ -124,11 +159,24 @@ module Api::V1::Quiz
       end
     end
 
-    if save
-      quiz.update_attributes update_params
-    else
-      quiz.attributes = update_params
+    # discard time limit if it's a negative value
+    if update_params.has_key?('time_limit')
+      time_limit = update_params.fetch('time_limit', quiz.time_limit)
+
+      if time_limit && time_limit.to_i < 0
+        update_params.delete 'time_limit'
+      end
     end
+
+    published = update_params.delete('published') if update_params.has_key?('published')
+    quiz.attributes = update_params
+    unless published.nil? || published.to_s.blank?
+      if quiz.new_record?
+        quiz.save
+      end
+      quiz.workflow_state = Canvas::Plugin.value_to_boolean(published) ? 'available' : 'unpublished'
+    end
+    quiz.save if save
 
     quiz
   end

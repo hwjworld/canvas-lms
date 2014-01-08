@@ -116,108 +116,115 @@ describe CalendarEvent do
   end
 
   context "ical" do
-    it ".to_ics should not fail for null times" do
-      calendar_event_model(:start_at => "", :end_at => "")
-      res = @event.to_ics
-      res.should_not be_nil
-      res.match(/DTSTART/).should be_nil
-    end
+    describe "to_ics" do
+      it "should not fail for null times" do
+        calendar_event_model(:start_at => "", :end_at => "")
+        res = @event.to_ics
+        res.should_not be_nil
+        res.match(/DTSTART/).should be_nil
+      end
 
-    it ".to_ics should not return data for null times" do
-      calendar_event_model(:start_at => "", :end_at => "")
-      res = @event.to_ics(false)
-      res.should be_nil
-    end
+      it "should not return data for null times" do
+        calendar_event_model(:start_at => "", :end_at => "")
+        res = @event.to_ics(false)
+        res.should be_nil
+      end
 
-    it ".to_ics should return string data for events with times" do
-      Time.zone = 'UTC'
-      calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
-      # force known value so we can check serialization
-      @event.updated_at = Time.at(1220443500) # 3 Sep 2008 12:05pm (UTC)
-      res = @event.to_ics
-      res.should_not be_nil
-      res.match(/DTSTART:20080903T115500Z/).should_not be_nil
-      res.match(/DTEND:20080903T120000Z/).should_not be_nil
-      res.match(/DTSTAMP:20080903T120500Z/).should_not be_nil
-    end
+      it "should return string data for events with times" do
+        Time.zone = 'UTC'
+        calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
+        # force known value so we can check serialization
+        @event.updated_at = Time.at(1220443500) # 3 Sep 2008 12:05pm (UTC)
+        res = @event.to_ics
+        res.should_not be_nil
+        res.match(/DTSTART:20080903T115500Z/).should_not be_nil
+        res.match(/DTEND:20080903T120000Z/).should_not be_nil
+        res.match(/DTSTAMP:20080903T120500Z/).should_not be_nil
+      end
 
-    it ".to_ics should return string data for events with times in correct tz" do
-      Time.zone = 'Alaska' # -0800
-      calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
-      # force known value so we can check serialization
-      @event.updated_at = Time.at(1220472300) # 3 Sep 2008 12:05pm (AKDT)
-      res = @event.to_ics
-      res.should_not be_nil
-      res.match(/DTSTART:20080903T195500Z/).should_not be_nil
-      res.match(/DTEND:20080903T200000Z/).should_not be_nil
-      res.match(/DTSTAMP:20080903T200500Z/).should_not be_nil
-    end
+      it "should return string data for events with times in correct tz" do
+        Time.zone = 'Alaska' # -0800
+        calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
+        # force known value so we can check serialization
+        @event.updated_at = Time.at(1220472300) # 3 Sep 2008 12:05pm (AKDT)
+        res = @event.to_ics
+        res.should_not be_nil
+        res.match(/DTSTART:20080903T195500Z/).should_not be_nil
+        res.match(/DTEND:20080903T200000Z/).should_not be_nil
+        res.match(/DTSTAMP:20080903T200500Z/).should_not be_nil
+      end
 
-    it ".to_ics should return data for events with times" do
-      Time.zone = 'UTC'
-      calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
-      # force known value so we can check serialization
-      @event.updated_at = Time.at(1220443500) # 3 Sep 2008 12:05pm (UTC)
-      res = @event.to_ics(false)
-      res.should_not be_nil
-      res.start.icalendar_tzid.should == 'UTC'
-      res.start.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 11:55am").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-      res.end.icalendar_tzid.should == 'UTC'
-      res.end.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:00pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-      res.dtstamp.icalendar_tzid.should == 'UTC'
-      res.dtstamp.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:05pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-    end
+      it "should return data for events with times" do
+        Time.zone = 'UTC'
+        calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
+        # force known value so we can check serialization
+        @event.updated_at = Time.at(1220443500) # 3 Sep 2008 12:05pm (UTC)
+        res = @event.to_ics(false)
+        res.should_not be_nil
+        res.start.icalendar_tzid.should == 'UTC'
+        res.start.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 11:55am").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+        res.end.icalendar_tzid.should == 'UTC'
+        res.end.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:00pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+        res.dtstamp.icalendar_tzid.should == 'UTC'
+        res.dtstamp.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:05pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+      end
 
-    it ".to_ics should return data for events with times in correct tz" do
-      Time.zone = 'Alaska' # -0800
-      calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
-      # force known value so we can check serialization
-      @event.updated_at = Time.at(1220472300) # 3 Sep 2008 12:05pm (AKDT)
-      res = @event.to_ics(false)
-      res.should_not be_nil
-      res.start.icalendar_tzid.should == 'UTC'
-      res.start.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 11:55am").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-      res.end.icalendar_tzid.should == 'UTC'
-      res.end.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:00pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-      res.end.icalendar_tzid.should == 'UTC'
-      res.dtstamp.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:05pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
-    end
+      it "should return data for events with times in correct tz" do
+        Time.zone = 'Alaska' # -0800
+        calendar_event_model(:start_at => "Sep 3 2008 11:55am", :end_at => "Sep 3 2008 12:00pm")
+        # force known value so we can check serialization
+        @event.updated_at = Time.at(1220472300) # 3 Sep 2008 12:05pm (AKDT)
+        res = @event.to_ics(false)
+        res.should_not be_nil
+        res.start.icalendar_tzid.should == 'UTC'
+        res.start.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 11:55am").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+        res.end.icalendar_tzid.should == 'UTC'
+        res.end.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:00pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+        res.end.icalendar_tzid.should == 'UTC'
+        res.dtstamp.strftime('%Y-%m-%dT%H:%M:%S').should == Time.zone.parse("Sep 3 2008 12:05pm").in_time_zone('UTC').strftime('%Y-%m-%dT%H:%M:00')
+      end
 
-    it ".to_ics should return string dates for all_day events" do
-      calendar_event_model(:start_at => "Sep 3 2008 12:00am")
-      @event.all_day.should eql(true)
-      @event.end_at.should eql(@event.start_at)
-      res = @event.to_ics
-      res.match(/DTSTART;VALUE=DATE:20080903/).should_not be_nil
-      res.match(/DTEND;VALUE=DATE:20080903/).should_not be_nil
-    end
+      it "should return string dates for all_day events" do
+        calendar_event_model(:start_at => "Sep 3 2008 12:00am")
+        @event.all_day.should eql(true)
+        @event.end_at.should eql(@event.start_at)
+        res = @event.to_ics
+        res.match(/DTSTART;VALUE=DATE:20080903/).should_not be_nil
+        res.match(/DTEND;VALUE=DATE:20080903/).should_not be_nil
+      end
 
-    it ".to_ics should return a plain-text description" do
-      calendar_event_model(:start_at => "Sep 3 2008 12:00am", :description => <<-HTML)
+      it "should return a plain-text description" do
+        calendar_event_model(:start_at => "Sep 3 2008 12:00am", :description => <<-HTML)
       <p>
         This assignment is due December 16th. <b>Please</b> do the reading.
         <br/>
         <a href="www.example.com">link!</a>
       </p>
       HTML
-      ev = @event.to_ics(false)
-      ev.description.should == "This assignment is due December 16th. Please do the reading.
+        ev = @event.to_ics(false)
+        ev.description.should match_ignoring_whitespace("This assignment is due December 16th. Please do the reading.
  
 
-[link!](www.example.com)"
-      ev.x_alt_desc.should == @event.description
-    end
-  end
+[link!](www.example.com)")
+        ev.x_alt_desc.should == @event.description
+      end
 
-  context "clone_for" do
-    it "should clone for another context" do
-      calendar_event_model(:start_at => "Sep 3 2008", :title => "some event")
-      course
-      @new_event = @event.clone_for(@course)
-      @new_event.context.should_not eql(@event.context)
-      @new_event.context.should eql(@course)
-      @new_event.start_at.should eql(@event.start_at)
-      @new_event.title.should eql(@event.title)
+      it "should add a course code to the summary of an event that has a course as an effective_context" do
+        course_model
+        calendar_event_model(:start_at => "Sep 3 2008 12:00am")
+        @event.effective_context_code = @course.asset_string
+        ics = @event.to_ics
+        ics.should include("SUMMARY:#{@event.title} [#{@course.course_code}]")
+      end
+
+      it "should add a course code to the summary of an event that has a course as its effective_context's context" do
+        course_model
+        group(:context => @course)
+        calendar_event_model(:start_at => "Sep 3 2008 12:00am")
+        @event.effective_context_code = @group.asset_string
+        ics = @event.to_ics
+        ics.should include("SUMMARY:#{@event.title} [#{@course.course_code}]")
+      end
     end
   end
 
@@ -374,7 +381,7 @@ describe CalendarEvent do
         student_in_course(:course => @course, :active_all => true)
         @student2 = @user
 
-        c1 = @course.group_categories.create
+        c1 = group_category
         @group = c1.groups.create(:context => @course)
         @group.users << @student1 << @student2
 
@@ -538,9 +545,9 @@ describe CalendarEvent do
     it "should enforce the group category" do
       teacher = user(:active_all => true)
       @course.enroll_teacher(teacher).accept!
-      c1 = @course.group_categories.create
+      c1 = group_category
       g1 = c1.groups.create(:context => @course)
-      c2 = @course.group_categories.create
+      c2 = group_category(name: "bar")
       g2 = c2.groups.create(:context => @course)
 
       ag = AppointmentGroup.create(:title => "test", :contexts => [@course], :sub_context_codes => [c1.asset_string],

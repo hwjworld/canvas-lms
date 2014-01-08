@@ -2,10 +2,12 @@ require File.expand_path(File.dirname(__FILE__) + '/helpers/manage_groups_common
 require 'thread'
 
 describe "manage groups students" do
-  it_should_behave_like "manage groups selenium tests"
+  it_should_behave_like "in-process server selenium tests"
 
   before (:each) do
     course_with_teacher_logged_in
+    Account.default.settings[:enable_manage_groups2] = false
+    Account.default.save!
   end
 
   context "misc" do
@@ -275,6 +277,7 @@ describe "manage groups students" do
       confirm_dialog = driver.switch_to.alert
       confirm_dialog.accept
       ff(".left_side .group").should be_empty
+      wait_for_ajaximations
       @course.group_categories.all.count.should == 0
     end
 
@@ -369,21 +372,21 @@ describe "manage groups students" do
 
     it "should give Assigning Students... visual feedback" do
       #pending "causes whatever spec follows this to fail even in different files"
-        assign_students = fj("#category_#{@category.id} .assign_students_link:visible")
-        assign_students.should_not be_nil
-        assign_students.click
-        # Do some magic to make sure the next ajax request doesn't complete until we're ready for it to
-        lock = Mutex.new
-        lock.lock
-        GroupsController.before_filter { lock.lock; lock.unlock; true }
-        confirm_dialog = driver.switch_to.alert
-        confirm_dialog.accept
-        loading = fj("#category_#{@category.id} .group_blank .loading_members:visible")
-        loading.text.should == 'Assigning Students...'
-        lock.unlock
-        GroupsController.filter_chain.pop
-        # make sure we wait before moving on
-        wait_for_ajax_requests
-      end
+      assign_students = fj("#category_#{@category.id} .assign_students_link:visible")
+      assign_students.should_not be_nil
+      assign_students.click
+      # Do some magic to make sure the next ajax request doesn't complete until we're ready for it to
+      lock = Mutex.new
+      lock.lock
+      GroupsController.before_filter { lock.lock; lock.unlock; true }
+      confirm_dialog = driver.switch_to.alert
+      confirm_dialog.accept
+      loading = fj("#category_#{@category.id} .group_blank .loading_members:visible")
+      loading.text.should == 'Assigning Students...'
+      lock.unlock
+      GroupsController.filter_chain.pop
+      # make sure we wait before moving on
+      wait_for_ajax_requests
     end
   end
+end

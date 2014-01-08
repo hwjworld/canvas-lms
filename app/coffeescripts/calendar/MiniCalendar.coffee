@@ -22,6 +22,7 @@ define [
         $.subscribe
           "Calendar/visibleContextListChanged" : @visibleContextListChanged
           "Calendar/refetchEvents" : @refetchEvents
+          "Calendar/currentDate" : @gotoDate
       )
 
     getEvents: (start, end, cb) =>
@@ -36,8 +37,11 @@ define [
     dayClick: (date) =>
       @mainCalendar.gotoDate(date)
 
+    gotoDate: (date) =>
+      @calendar.fullCalendar("gotoDate", date)
+
     eventRender: (event, element, view) =>
-      cell = view.dateCell(event.start)
+      cell = view.dateToCell(event.start)
       td = view.element.find("tr:nth-child(#{cell.row+1}) td:nth-child(#{cell.col+1})")
       td.addClass("event")
       tooltip = I18n.t 'event_on_this_day', 'There is an event on this day'
@@ -49,7 +53,8 @@ define [
       false # don't render the event
 
     visibleContextListChanged: (list) =>
-      @calendar.fullCalendar('refetchEvents')
+      @refetchEvents()
 
     refetchEvents: () =>
+      return unless @calendar.is(':visible')
       @calendar.fullCalendar('refetchEvents')

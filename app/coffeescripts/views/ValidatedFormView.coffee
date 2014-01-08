@@ -1,12 +1,14 @@
 define [
   'Backbone'
+  'compiled/views/ValidatedMixin'
   'jquery'
   'underscore'
   'compiled/fn/preventDefault'
+  'i18n!errors'
   'jquery.toJSON'
   'jquery.disableWhileLoading'
   'jquery.instructure_forms'
-], (Backbone, $, _, preventDefault) ->
+], (Backbone, ValidatedMixin, $, _, preventDefault, I18n) ->
 
   ##
   # Sets model data from a form, saves it, and displays errors returned in a
@@ -23,12 +25,20 @@ define [
   #   @signature `(response, status, jqXHR)`
   class ValidatedFormView extends Backbone.View
 
+    @mixin ValidatedMixin
+
     tagName: 'form'
 
     className: 'validated-form-view'
 
     events:
       submit: 'submit'
+
+    ##
+    # Default options to pass when saving the model.
+    saveOpts:
+      # wait for server success response before updating model attributes locally
+      wait: true
 
     ##
     # Sets the model data from the form and saves it. Called when the form
@@ -42,18 +52,18 @@ define [
     #
     # @api public
     # @returns jqXHR
-    submit: preventDefault ->
-      @$el.hideErrors()
+    submit: (event) ->
+      event?.preventDefault()
+      @hideErrors()
 
       data = @getFormData()
       errors = @validateBeforeSave data, {}
 
       if _.keys(errors).length == 0
         disablingDfd = new $.Deferred()
-        saveDfd = @model
-          .save(data, @saveOpts)
-          .then(@onSaveSuccess, @onSaveFail)
-          .fail -> disablingDfd.reject()
+        saveDfd = @saveFormData(data)
+        saveDfd.then(@onSaveSuccess, @onSaveFail)
+        saveDfd.fail -> disablingDfd.reject()
 
         unless @dontRenableAfterSaveSuccess
           saveDfd.done -> disablingDfd.resolve()
@@ -72,16 +82,61 @@ define [
       @$el.toJSON()
 
     ##
-    # Override this to perform pre-save validations.  Return errors that can
-    # show with the showErrors format below
-    validateBeforeSave: -> {}
+    # Saves data from the form using the model.
+    # Override to provide customized saving behavior.
+    saveFormData: (data=null) ->
+      model = @model
+      data ||= @getFormData()
+      saveOpts = @saveOpts
+      model.save(data, saveOpts)
+
+    ##
+    # Performs validation on the form, using the validateFormData method, and
+    # shows the errors using showErrors.
+    #
+    # Override validateFormData or showErrors to change their respective behaviors.
+    #
+    # @api public
+    # @returns true if there were no validation errors, otherwise false
+    validate: (opts={}) ->
+      opts ||= {}
+      data = opts['data'] || @getFormData()
+      errors = @validateFormData data, {}
+
+      @hideErrors()
+      @showErrors(errors)
+      errors.length == 0
+
+    ##
+    # Validates provided form data, returning any errors found.
+    # Override to provide customized validation behavior.
+    #
+    # @returns errors (see parseErrorResponse for the errors format)
+    validateFormData: (data) ->
+      {}
+
+    ##
+    # Validates provided form data just before saving, returning any errors
+    # found. By default it delegates to @validateFormData to perform validation,
+    # but allows for alternative save-oriented validation to be performed.
+    # Override to provide customized pre-save validation behavior.
+    #
+    # @returns errors (see parseErrorResponse for the errors format)
+    validateBeforeSave: (data) ->
+      @validateFormData(data)
+
+    ##
+    # Hides all errors previously shown in the UI.
+    # Override to match the way showErrors displays the errors.
+    hideErrors: ->
+      @$el.hideErrors()
 
     onSaveSuccess: =>
       @trigger 'success', arguments...
 
     onSaveFail: (xhr) =>
-      errors = {}
-      errors = @parseErrorResponse xhr.responseText
+      errors = @parseErrorResponse xhr
+      errors ||= {}
       @showErrors errors
       @trigger 'fail', errors, arguments...
 
@@ -110,15 +165,17 @@ define [
     #     ]
     #   }
     parseErrorResponse: (response) ->
-      $.parseJSON(response).errors
+      if response.status is 422
+        {authenticity_token: "invalid"}
+      else
+        try
+          $.parseJSON(response.responseText).errors
+        catch error
+          {}
 
-    showErrors: (errors) ->
-      for fieldName, field of errors
-        $input = @findField fieldName
-        html = (message for {message} in field).join('</p><p>')
-        $input.errorBox "<div>#{html}</div>"
-        field.$input = $input
-        field.$errorBox = $input.data 'associated_error_box'
+    translations:
+      required: I18n.t "required", "Required"
+      blank: I18n.t "blank", "Required"
 
     ##
     # Errors are displayed relative to the field to which they belong. If
@@ -140,8 +197,10 @@ define [
     fieldSelectors: null
 
     findField: (field) ->
-      selector = @fieldSelectors?[field] or "[name=#{field}]"
+      selector = @fieldSelectors?[field] or "[name='#{field}']"
       $el = @$(selector)
       if $el.data('rich_text')
         $el = $el.next('.mceEditor').find(".mceIframeContainer")
+      if $el.length > 1 # e.g. hidden input + checkbox, show it by the checkbox
+        $el = $el.not('[type=hidden]')
       $el

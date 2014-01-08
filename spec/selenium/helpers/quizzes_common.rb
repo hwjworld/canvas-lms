@@ -59,6 +59,18 @@ shared_examples_for "quizzes selenium tests" do
     wait_for_ajaximations
   end
 
+  def create_file_upload_question
+    question = fj(".question_form:visible")
+    click_option('.question_form:visible .question_type', 'File Upload Question')
+
+    replace_content(question.find_element(:css, "input[name='question_points']"), '4')
+
+    type_in_tiny '.question_form:visible textarea.question_content', 'This is a file upload question.'
+
+    submit_form(question)
+    wait_for_ajaximations
+  end
+
   def add_quiz_question(points)
     click_questions_tab
     @points_total += points.to_i
@@ -75,22 +87,20 @@ shared_examples_for "quizzes selenium tests" do
     f(".points_possible").text.should == @points_total.to_s
   end
 
-  def quiz_with_new_questions
+  def quiz_with_new_questions(goto_edit=true)
     @context = @course
     bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
     @q = quiz_model
-    a = AssessmentQuestion.create!
-    b = AssessmentQuestion.create!
-    bank.assessment_questions << a
-    bank.assessment_questions << b
-    answers = {'answer_0' => {'id' => 1}, 'answer_1' => {'id' => 2}, 'answer_2' => {'id' => 3}}
+    a = bank.assessment_questions.create!
+    b = bank.assessment_questions.create!
+    answers = [{'id' => 1}, {'id' => 2}, {'id' => 3}]
     @quest1 = @q.quiz_questions.create!(:question_data => {:name => "first question", 'question_type' => 'multiple_choice_question', 'answers' => answers, :points_possible => 1}, :assessment_question => a)
     @quest2 = @q.quiz_questions.create!(:question_data => {:name => "second question", 'question_type' => 'multiple_choice_question', 'answers' => answers, :points_possible => 1}, :assessment_question => b)
     yield bank, @q if block_given?
 
     @q.generate_quiz_data
     @q.save!
-    get "/courses/#{@course.id}/quizzes/#{@q.id}/edit"
+    get "/courses/#{@course.id}/quizzes/#{@q.id}/edit" if goto_edit
     @q
   end
 
@@ -102,8 +112,46 @@ shared_examples_for "quizzes selenium tests" do
     fj('#quiz_tabs ul:first a:eq(1)').click
   end
 
+  # Locate an anchor using its text() node value. The anchor is expected to
+  # contain an "accessible variant"; a span.screenreader-only with a clone of its
+  # text() value.
+  #
+  # @argument text [String]
+  #   The label, or text() value, of the anchor.
+  #
+  # We can't use Selenium's `:link_text` because the text() of <a> will actually
+  # contain two times the text value for the reason above, so we'll use XPath
+  # instead.
+  #
+  # We can't use Selenium's `:partial_link_text` or XPath's `fn:contains` either
+  # because we're not after a partial match (ie, "New Question" would match
+  # "New Question Group" and that's incorrect.)
+  def find_accessible_link(text)
+    driver.find_elements(:xpath, "//a[normalize-space(.)=\"#{text} #{text}\"]")[0]
+  end
+
+  # Matcher for a label (or a word) to be used against a block of text that
+  # contains an accessible variant.
+  #
+  # @argument label [String]
+  #   The label, or text() value of the element, to create the matcher for.
+  #
+  # Example: testing the content of an accessible link whose label is 'Publish'
+  #
+  #     my_link.text.should match accessible_variant_of 'Publish' # => passes
+  #     my_link.text.should == 'Publish' # => fails, text will be 'Publish Publish'
+  #
+  # See #find_accessible_link for more info.
+  def accessible_variant_of(label)
+    /(?:#{label}\s*){2}/
+  end
+
   def click_new_question_button
-    driver.find_element(:link_text, 'New Question').click
+    find_accessible_link('New Question').click
+  end
+
+  def click_quiz_statistics_button
+    find_accessible_link('Quiz Statistics').click
   end
 
   def click_save_settings_button
@@ -122,10 +170,10 @@ shared_examples_for "quizzes selenium tests" do
   end
 
   def take_quiz
-    @quiz ||= quiz_with_new_questions
+    @quiz ||= quiz_with_new_questions(!:goto_edit)
 
     get "/courses/#{@course.id}/quizzes/#{@quiz.id}/take?user_id=#{@user.id}"
-    expect_new_page_load { driver.find_element(:link_text, 'Take the Quiz').click }
+    expect_new_page_load { f("#take_quiz_link").click }
 
     # sleep because display is updated on timer, not ajax callback
     sleep 1
@@ -135,6 +183,24 @@ shared_examples_for "quizzes selenium tests" do
     #This step is to prevent selenium from freezing when the dialog appears when leaving the page
     driver.find_element(:link, 'Quizzes').click
     driver.switch_to.alert.accept
+  end
+
+  def take_and_answer_quiz(submit=true)
+    get "/courses/#{@course.id}/quizzes/#{@quiz.id}/take?user_id=#{@user.id}"
+    expect_new_page_load { driver.find_element(:link_text, 'Take the Quiz').click }
+
+    answer = @quiz.stored_questions[0][:answers][0][:id]
+
+    fj("input[type=radio][value=#{answer}]").click
+    wait_for_js
+
+    if submit
+      driver.execute_script("$('#submit_quiz_form .btn-primary').click()")
+
+      keep_trying_until do
+        f('.quiz-submission .quiz_score .score_value').should be_displayed
+      end
+    end
   end
 
   def set_answer_comment(answer_num, text)
@@ -157,7 +223,7 @@ shared_examples_for "quizzes selenium tests" do
   def edit_first_question
     hover_first_question
     f('.edit_question_link').click
-    wait_for_animations
+    wait_for_ajaximations
   end
 
   def save_question
@@ -203,7 +269,7 @@ shared_examples_for "quizzes selenium tests" do
   # creates a question group through the browser
   def create_question_group
     click_questions_tab
-    driver.find_element(:link_text, 'New Question Group').click
+    find_accessible_link('New Question Group').click
     submit_form('#group_top_new form')
     wait_for_ajax_requests
     @group = QuizGroup.last

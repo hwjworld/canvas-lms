@@ -27,15 +27,20 @@
   left: 0
   width: 100%
 
+#flash_message_buffer // contains copies of all static messages so that we reserve enough height in the ui
+  visibility: hidden
+
 #flash_message_holder
+  height: 0
+
+#flash_message_holder, #flash_message_buffer
   top: 0
   list-style: none
   margin: 0
   padding: 0
-  height: 0
-  li, .ui-effects-wrapper
+  li:not(.ic-flash-info, .ic-flash-success, .ic-flash-warning, .ic-flash-error), .ui-effects-wrapper
     margin: 0 auto !important
-  li
+  li:not(.ic-flash-info, .ic-flash-success, .ic-flash-warning, .ic-flash-error)
     box-shadow: 0 1px 1px rgba(0,0,0,0.25)
     border-bottom-color: rgba(0,0,0,0.5)
     padding: 4px 40px 4px 8px
@@ -95,7 +100,7 @@
       left: 22px
       width: 42px
       height: 42px
-  h2
+  h2, .h2
     font-size: 1.5em
     &.ui-state-error
       padding: 15px
@@ -113,7 +118,7 @@
 .user_content,.mceContentBody
   position: relative
   min-height: 5px
-  h3
+  h3, .h3
     margin-top: 1.0em
     margin-bottom: 1.0em
   table
@@ -136,7 +141,7 @@
   :margin 5px 20px
   :clear both
   :font-size 0.9em
-  h2
+  h2, .h2
     margin-top: 0
     :background-color #eee
     :text-transform uppercase
@@ -168,12 +173,12 @@
 
 #right-side
 
-  h2
+  h2, .h2
     .small_link
       :font-size 0.6em
       :font-family arial, sans-serif
 
-  h4.item_list_header
+  h4.item_list_header, .h4.item_list_header
     :font-size 1.3em
     :font-weight bold
     :border-bottom 1px solid #888
@@ -359,12 +364,12 @@
 
 table.summary
   width: auto
-  th
+  th, caption
     text-align: left
-  th, td
+  th, td, caption
     padding: 2px 8px
     vertical-align: top
-  thead th
+  thead th, caption
     background-color: #4d4d4d
     color: #fff
     font-weight: normal
@@ -458,10 +463,6 @@ span.hint
     :font-size 1.5em
     :color #000
 
-.form_text_hint
-  :font-style italic
-  :color #888
-
 .loading_image
   :background-color #fff
 
@@ -527,7 +528,7 @@ ul.group_list
   :width 100%
   :display none
 
-  h3
+  h3, .h3
     :border-bottom 1px solid #aaa
     :margin 0 0 10px
     :padding-bottom 5px
@@ -595,7 +596,7 @@ ul.group_list
             :color #555
 
 #content_tags_dialog
-  h3
+  h3, .h3
     :margin 0
     :padding 0
     :font-size 0.8em
@@ -1299,7 +1300,7 @@ body.padless-content #content,#content.padless
 .custom_search_results_link
   font-size: 1.2em
 
-h2.h-margin-top,h3.h-margin-top
+h2.h-margin-top,h3.h-margin-top, .h2.h-margin-top, .h3.h-margin-top
   margin-top: 20px
 
 #license_help_dialog

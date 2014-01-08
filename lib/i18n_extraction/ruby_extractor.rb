@@ -24,17 +24,16 @@ module I18nExtraction
 
       call_scope = @scope
       if receiver && receiver.last == :Plugin && method == :register &&
-          exp.first && exp.first.sexp_type == :arglist &&
-          exp.first[1] && [:lit, :str].include?(exp.first[1].sexp_type)
-        call_scope = "plugins.#{exp.first[1].last}."
+          exp.first && [:lit, :str].include?(exp.first.sexp_type)
+        call_scope = "plugins.#{exp.first.last}."
       end
 
       # ignore things like mt's t call
       unless ALL_CALLS.include?(@current_defn)
         if TRANSLATE_CALLS.include?(method)
-          process_translate_call(receiver, method, exp.shift)
+          process_translate_call(receiver, method, exp)
         elsif LABEL_CALLS.include?(method)
-          process_label_call(receiver, method, exp.shift)
+          process_label_call(receiver, method, exp)
         end
       end
 
@@ -54,7 +53,6 @@ module I18nExtraction
 
     def process_translate_call(receiver, method, args)
       line = args.line
-      args.shift
       unless args.size >= 2
         if method == :before_label
           process args.shift until args.empty?
@@ -106,7 +104,7 @@ module I18nExtraction
             raise "interpolation value not provided for #{match[0].to_sym.inspect} (#{sub_key.inspect}) on line #{line}"
           end
         end
-        add_translation sub_key, str, (:remove_whitespace if @in_html_view && ![:mt, :jt].include?(method))
+        add_translation sub_key, str, line, (:remove_whitespace if @in_html_view && ![:mt, :jt].include?(method))
       end
     end
 
@@ -118,7 +116,6 @@ module I18nExtraction
     #  label_tag :foo, :en => "Foo"
     #  label_tag :foo, :foo_key, :en => "Foo"
     def process_label_call(receiver, method, args)
-      args.shift
       args.shift unless receiver || method.to_s == 'label_tag' # remove object_name arg
 
       inferred = false
@@ -150,7 +147,7 @@ module I18nExtraction
         if default
           key = process_translation_key(receiver, key_arg, 'labels.', inferred)
           raise "english default for a blabel call ends in a colon on line #{key_arg.line}" if method == :blabel && default.strip =~ /:\z/
-          add_translation key, default, :remove_whitespace
+          add_translation key, default, key_arg.line, :remove_whitespace
         elsif key_arg.sexp_type == :str && key_arg.last.to_s =~ /[^a-z_\.]/
           raise "unlocalized label call on line #{key_arg.line}: #{key_arg.inspect}"
         else
@@ -165,12 +162,13 @@ module I18nExtraction
         raise "invalid translation key #{exp.inspect} on line #{exp.line}"
       end
       key = exp.pop.to_s
-      if key =~ /\A#/
+      if key =~ /\A#/ || receiver && receiver.last == :I18n
         key.sub!(/\A#/, '')
       else
-        raise "ambiguous translation key #{key.inspect} on line #{exp.line}" if @scope.empty? && receiver.nil?
+        raise "ambiguous translation key #{key.inspect} on line #{exp.line}" if @scope.empty?
         key = @scope + relative_scope + key
       end
+      key
     end
 
     def process_default_translation(exp, key)
@@ -199,8 +197,8 @@ module I18nExtraction
         exp.last
       elsif exp.sexp_type == :lit && options.delete(:allow_symbols)
         exp.last
-      elsif exp.sexp_type == :call && exp[2] == :+ && exp.last && exp.last.sexp_type == :arglist && exp.last.size == 2 && exp.last.last.sexp_type == :str
-        process_possible_string_concat(exp[1]) + exp.last.last.last
+      elsif exp.sexp_type == :call && exp[2] == :+ && exp.size == 4 && exp[3].sexp_type == :str
+        process_possible_string_concat(exp[1]) + exp[3].last
       else
         raise options[:top_level_error] ? options[:top_level_error].call(exp) : "unsupported string concatenation/interpolation #{exp.inspect} on line #{exp.line}"
       end

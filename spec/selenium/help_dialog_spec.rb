@@ -18,7 +18,7 @@ describe "help dialog" do
       driver.execute_script("window.INST.browser = {ie: true, version: 8}")
       f('#footer .help_dialog_trigger').click
       wait_for_ajaximations
-      element_exists(".ui-state-error").should be_false
+      flash_message_present?(:error).should be_false
     end
   end
 
@@ -89,6 +89,7 @@ describe "help dialog" do
     end
 
     it "should allow submitting a ticket" do
+      pending('193')
       Setting.set('show_feedback_link', 'true')
       get "/dashboard"
       f('.help_dialog_trigger').click

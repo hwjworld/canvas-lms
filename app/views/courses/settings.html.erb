@@ -20,14 +20,11 @@
   <ul>
     <li id="course_details_tab"><a href="#tab-details"><%= t('tabs.details', %{Course Details}) %></a></li>
     <li id="sections_tab"><a href="#tab-sections"><%= t('tabs.sections', %{Sections}) %></a></li>
-    <% if can_see_users %>
-      <li id="users_tab"><a href="#tab-users" id="tab-users-link"><%= t('tabs.users', %{Users}) %></a></li>
-    <% end %>
     <% if can_do @context, @current_user, :update %>
       <li id="navigation_tab"><a href="#tab-navigation"><%= t('tabs.navigation', %{Navigation}) %></a></li>
     <% end %>
     <% if can_do @context, @current_user, :update %>
-      <li id="external_tools_tab"><a href="#tab-tools" id="tab-tools-link"><%= t('tabs.tools', %{External Tools}) %></a></li>
+      <li id="external_tools_tab"><a href="#tab-tools" id="tab-tools-link"><%= t('tabs.tools', %{Apps}) %></a></li>
     <% end %>
     <% if publishing_enabled %>
       <li id="grade_publishing_tab"><a href="#tab-grade-publishing" id="tab-grade-publishing-link"><%= t('tabs.grade_publishing', %{Grade Publishing}) %></a></li>
@@ -35,13 +32,16 @@
     <% if @context.root_account.settings[:enable_alerts] && can_do(@context, @current_user, :manage_interaction_alerts) %>
       <li id="alerts_tab"><a href="#tab-alerts" id="tab-alerts-link"><%= t('tabs.alerts', %{Alerts}) %></a></li>
     <% end %>
+    <% if can_do @context, @current_user, :manage_feature_flags %>
+      <li id="feature_flags_tab"><a href="#tab-features" id="tab-features-link"><%= t('tabs.feature_options', %{Feature options}) %></a></li>
+    <% end %>
   </ul>
   <div id="tab-details">
     <h2><%= t('headings.details', %{Course Details}) %></h2>
-    <% form_for @context, :html => {:id => "course_form"} do |f| %>
+    <%= form_for @context, :html => {:id => "course_form"} do |f| %>
     <table class="coursesettings">
       <tr>
-        <th scope="row"><%= f.blabel :name, :course_name, :en => "Name" %></th>
+        <td class="form-label"><%= f.blabel :name, :course_name, :en => "Name" %></td>
         <td class="nobr">
           <% if can_rename_course %>
             <%= f.text_field :name, :class => "course_form", :maxlength => '255', :style => "width: 150px;" %>
@@ -52,7 +52,7 @@
         </td>
       </tr>
       <tr>
-        <th scope="row" class="nobr"><%= f.blabel :course_code, :en => "Course Code" %></th>
+        <td class="form-label nobr"><%= f.blabel :course_code, :en => "Course Code" %></td>
         <td class="nobr">
           <% if can_rename_course %>
             <span class="course_form"><%= f.text_field :course_code, :maxlength => '255', :style => "width: 100px;" %></span>
@@ -63,7 +63,7 @@
         </td>
       <% if @context.sis_source_id && can_do(@context.root_account, @current_user, :read_sis) || can_do(@context.root_account, @current_user, :manage_sis) %>
         </tr><tr>
-          <th scope="row"><%= f.blabel :sis_source_id, :en => "SIS ID" %></th>
+          <td class="form-label"><%= f.blabel :sis_source_id, :en => "SIS ID" %></td>
           <td>
             <span class="course_form">
               <% if can_do(@context.root_account, @current_user, :manage_sis) %>
@@ -77,11 +77,11 @@
       <% end %>
       <% if @current_user && Account.site_admin.account_users_for(@current_user).present? %>
         </tr><tr>
-          <th scope="row"><%= f.blabel :root_account_id, :en => "Root Account" %></th>
+          <td class="form-label"><%= f.blabel :root_account_id, :en => "Root Account" %></td>
           <td><%= link_to @context.root_account.name, account_url(@context.root_account.id)  %></td>
       <% end %>
       </tr><tr>
-        <th scope="row"><%= f.blabel :account_id, :en => "Department" %></th>
+        <td class="form-label"><%= f.blabel :account_id, :en => "Department" %></td>
         <td>
           <span class="course_form">
             <% if can_do(@context.root_account, @current_user, :manage_courses) %>
@@ -109,12 +109,12 @@
           </span>
         </td>
       </tr><tr>
-        <th scope="row"><%= f.blabel :enrollment_term_id, :en => "Term" %></th>
+        <td class="form-label"><%= f.blabel :enrollment_term_id, :en => "Term" %></td>
         <td>
           <span class="course_form">
             <% if can_do(@context.root_account, @current_user, :manage_courses) %>
               <select name="course[enrollment_term_id]" id="course_enrollment_term_id">
-                <% @context.root_account.enrollment_terms.active.sort_by{|t| t.start_at || Time.parse("Jan 1 2000")}.each do |term| %>
+                <% @context.root_account.enrollment_terms.active.sort_by{|t| t.start_at || SortFirst}.each do |term| %>
                   <option value="<%= term.id %>" <%= 'selected' if term.id == @context.enrollment_term_id %>><%= term.name %></option>
                 <% end %>
               </select>
@@ -125,16 +125,16 @@
           <span class="course_info term_name"><%= @context.enrollment_term.name %></span>
         </td>
       </tr><tr>
-        <th scope="row"><%= f.blabel :start_at, :en => "Starts" %></th>
+        <td class="form-label"><%= f.blabel :start_at, :en => "Starts" %></td>
         <td class="nobr">
-          <span class="course_form"><%= f.text_field :start_at, :class => "date_entry", :value => date_string(@context.start_at, :long) %></span>
-          <span class="course_info start_at"><%= datetime_string(@context.start_at) || t('no_date', "No Date Set") %></span>
+          <span class="course_form"><%= f.text_field :start_at, :class => "date_entry", :value => datetime_string(@context.start_at, :verbose, nil, true) %></span>
+          <span class="course_info start_at"><%= datetime_string(@context.start_at, :verbose, nil, true) || t('no_date', "No Date Set") %></span>
         </td>
       </tr><tr>
-        <th scope="row"><%= f.blabel :conclude_at, :en => "Ends" %></th>
+        <td class="form-label"><%= f.blabel :conclude_at, :en => "Ends" %></td>
         <td class="nobr">
-          <span class="course_form"><%= f.text_field :conclude_at, :class => "date_entry", :value => date_string(@context.conclude_at, :long) %></span>
-          <span class="course_info conclude_at"><%= datetime_string(@context.conclude_at) || t('no_date', "No Date Set") %></span>
+          <span class="course_form"><%= f.text_field :conclude_at, :class => "date_entry", :value => datetime_string(@context.conclude_at, :verbose, nil, true) %></span>
+          <span class="course_info conclude_at"><%= datetime_string(@context.conclude_at, :verbose, nil, true) || t('no_date', "No Date Set") %></span>
           <div class="course_form">
             <%= f.check_box :restrict_enrollments_to_course_dates %>
             <%= f.label :restrict_enrollments_to_course_dates, :en => "Users can only participate in the course between these dates" %>
@@ -148,16 +148,17 @@
         </td>
       <% if available_locales.size > 1 %>
       </tr><tr>
-        <th scope="row"><%= f.blabel :locale, :language, :en => "Language" %></th>
+        <td class="form-label"><%= f.blabel :locale, :language, :en => "Language" %></td>
         <td>
           <div class="course_form">
             <% no_language = t(:no_language_preference, "Not set (user-configurable, defaults to %{language})", :language => available_locales[infer_locale(:context => @context.account)]) %>
-            <%= f.select :locale, [[no_language, nil]] + available_locales.invert.sort, :selected => @context.locale %>
-            <span> <%= mt :transifex_message, <<-TEXT, :transifex_url => "https://www.transifex.com/projects/p/canvas-lms/"
+            <%= f.select :locale, [[no_language, nil]] + available_locales.invert.sort, {:selected => @context.locale}, {:class => 'locale'} %>
+            <%= render :partial => 'shared/locale_warning' %>
+            <p> <%= mt :transifex_message, <<-TEXT, :transifex_url => "https://www.transifex.com/projects/p/canvas-lms/"
 Join the [Canvas Translation Community](%{transifex_url})
 TEXT
             %>
-            </span>
+            </p>
           </div>
           <span class="course_info locale"><%= @context.locale ? available_locales[@context.locale] : no_language %></span>
           <div class="aside palign">
@@ -166,10 +167,10 @@ TEXT
         </td>
       <% end %>
       </tr><tr>
-        <th scope="row"><%= f.blabel :storage_quota_mb, :storage_quota, :en => "File Storage" %></th>
+        <td class="form-label"><%= f.blabel :storage_quota_mb, :storage_quota, :en => "File Storage" %></td>
         <td>
           <span class="course_form">
-            <% if can_do(@context.account, @current_user, :manage_courses) %>
+            <% if can_do(@context.account, @current_user, :manage_storage_quotas) %>
               <%= f.text_field :storage_quota_mb, :style => "width: 50px;", :title => t('megabytes', "megabytes"), :value => @context.storage_quota_mb %>
             <% else %>
               <%= @context.storage_quota_mb %>
@@ -180,7 +181,7 @@ TEXT
         </td>
       <% if @context.turnitin_enabled? %>
       </tr><tr>
-        <th scope="row"><%= f.blabel :turnitin_comments, :en => "Turnitin Comments" %></th>
+        <td class="form-label"><%= f.blabel :turnitin_comments, :en => "Turnitin Comments" %></td>
         <td class="nobr">
           <span class="course_form"><span class="aside"><%= t('turnitin', %{these comments will be shown to students when submitting a Turnitin-enabled assignment}) %></span><br/><%= f.text_area :turnitin_comments, :style => "width: 90%; height: 50px;" %></span>
           <span class="course_info turnitin_comments"><%= @context.turnitin_comments %></span>
@@ -188,9 +189,9 @@ TEXT
       <% end %>
       </tr>
       <tr>
-        <th scope="row">
+        <td class="form-label">
           <label><%= before_label('grading_scheme', %{Grading Scheme}) %></label>
-        </th>
+        </td>
         <td>
           <span class="course_info grading_scheme_set">
             <%= @context.grading_standard_enabled? ? (@context.grading_standard_title || t('grading_standard_currently_set', "Currently Set")) : t('grading_standard_not_set', "Not Set") %>
@@ -205,7 +206,7 @@ TEXT
         </td>
       </tr>
       <tr>
-        <th scope="row"><%= f.blabel :license, :en => "License" %></th>
+        <td class="form-label"><%= f.blabel :license, :en => "License" %></td>
         <td colspan="3">
           <span class="course_form">
             <%= f.select :license, Course.licenses.map { |id, attrs| [attrs[:readable_license], id] }%>
@@ -214,13 +215,19 @@ TEXT
           <span class="course_info readable_license"><%= @context.readable_license %></span>
         </td>
       </tr><tr>
-        <th scope="row"><label><%= before_label('course_visibility', %{Visibility}) %></label></th>
+        <td class="form-label"><label><%= before_label('course_visibility', %{Visibility}) %></label></td>
         <td colspan="3">
           <span class="course_form">
-            <%= f.check_box :is_public, :class => "is_public_checkbox" %>
-            <%= f.label :is_public, :en => "Make this course publicly visible" %>
-            <span class="aside checklabelfix"><%= t('help.public_course', %{(student data will remain private)}) %></span>
+            <%= f.check_box :public_syllabus %>
+            <%= f.label :public_syllabus, :en => "Make the syllabus for this course publicly visible" %>
           </span>
+          <div>
+            <span class="course_form">
+              <%= f.check_box :is_public, :class => "is_public_checkbox" %>
+              <%= f.label :is_public, :en => "Make this course publicly visible" %>
+              <span class="aside checklabelfix"><%= t('help.public_course', %{(student data will remain private)}) %></span>
+            </span>
+          </div>
           <span class="course_info is_public"><%= @context.is_public ? t('public_course', 'Public') : t('private_course', 'Private') %></span>
           <div class="public_options">
             <span class="course_form">
@@ -236,19 +243,34 @@ TEXT
         <td></td>
         <td colspan="3">
           <span class="self_enrollment_message" style="<%= hidden unless @context.self_enrollment %>">
-            <%= t 'course_open_enrollment', <<-TEXT, :url => enroll_url(@context.self_enrollment_code || '{{ self_enrollment_code }}'), :url2 => register_url, :code => @context.self_enrollment_code || '{{ self_enrollment_code }}', :wrapper => '<b>\1</b>'
-                  This course has enabled open enrollment. Students can
-                  self-enroll in the course once you share with them this URL:
-                  *%{url}*. Alternatively, they can sign up at *%{url2}* and
-                  use the following join code: *%{code}*
-                TEXT
-            %>
+            <% if @context.root_account.self_registration? %>
+              <%= t 'course_open_enrollment', <<-TEXT, :url => enroll_url(@context.self_enrollment_code || '{{ self_enrollment_code }}'), :url2 => register_url, :code => @context.self_enrollment_code || '{{ self_enrollment_code }}', :wrapper => '<b>\1</b>'
+                    This course has enabled open enrollment. Students can
+                    self-enroll in the course once you share with them this URL:
+                    *%{url}*. Alternatively, they can sign up at *%{url2}* and
+                    use the following join code: *%{code}*
+                  TEXT
+              %>
+            <% else %>
+              <%= t 'course_open_enrollment_without_code', <<-TEXT, :url => enroll_url(@context.self_enrollment_code || '{{ self_enrollment_code }}'), :wrapper => '<b>\1</b>'
+                    This course has enabled open enrollment. Students can
+                    self-enroll in the course once you share with them this URL:
+                    *%{url}*
+                  TEXT
+              %>
+            <% end %>
           </span>
           <a href="#" class="course_form course_form_more_options_link" style="padding-left: 20px;"><%= t('links.more_options', %{more options}) %></a>
           <div class="course_form_more_options" style="display: none; padding-left: 20px;">
             <% if @context.self_enrollment_allowed? %>
               <%= f.check_box :self_enrollment, :class => 'self_enrollment_checkbox' %>
-              <%= f.label :self_enrollment, :en => "Let students self-enroll by sharing with them a secret URL or code" %><br/>
+              <label for="course_self_enrollment">
+                <% if @context.root_account.self_registration? %>
+                  <%= t :self_enrollment, "Let students self-enroll by sharing with them a secret URL or code" %>
+                <% else %>
+                  <%= t :self_enrollment_without_code, "Let students self-enroll by sharing with them a secret URL" %>
+                <% end %>
+              </label><br/>
               <div class="open_enrollment_holder" style="display: none;">
               <%= f.check_box :open_enrollment %>
               <%= f.label :open_enrollment, :en => "Add a \"Join this Course\" link to the course home page" %><br/>
@@ -273,7 +295,7 @@ TEXT
               [t('#course.wiki_permissions.teachers_students', "Teacher and Students"), "teachers,students"],
               [t('#course.wiki_permissions.all', "Anyone"), "teachers,students,public"]] %>
             <label for="course_default_wiki_editing_roles">
-              <%= t('wiki_editing_roles', %{can edit course wiki pages by default}) %>
+              <%= t('wiki_editing_roles', %{can create, rename, and edit course wiki pages by default}) %>
             </label><br/>
             <div class="changed_default_wiki_editing_roles" style="display: none; padding-left: 20px; font-size: 0.8em;">
               <input type="checkbox" name="update_default_pages" id="update_default_pages"/>
@@ -306,16 +328,6 @@ TEXT
     <ul id="sections">
       <% @context.course_sections.active.each do |section| %>
         <li class="section">
-          <% if can_do(section, @current_user, :delete) %>
-            <% if section.deletable? %>
-              <a class="section_link delete_section_link no-hover" title="<%= t('links.title.delete_section', %{Delete Section}) %>" href="<%= context_url(@context, :context_section_url, section) %>"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
-            <% else %>
-              <a class="section_link cant_delete_section_link no-hover" href="#" title="<%= t('links.title.cant_delete', %{You can't delete sections that have users enrolled}) %>"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
-            <% end %>
-          <% end %>
-          <% if can_do(section, @current_user, :update) && !section.defined_by_sis? %>
-            <a class="section_link edit_section_link no-hover" title="<%= t('links.title.edit_section', %{Edit Section}) %>" href="<%= context_url(@context, :context_section_url, section) %>"><i class="icon-edit standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.edit', %{Edit}) %></span></a>
-          <% end %>
           <% if can_do section, @current_user, :read %>
             <a href="<%= context_url(@context, :context_section_url, section) %>" class="name">
               <%= section.display_name %>
@@ -332,19 +344,32 @@ TEXT
               <% end %>
             )
           </span>
+          <span class="section_links">
+            <% if can_do(section, @current_user, :update) && !section.defined_by_sis? %>
+              <a class="no-hover edit_section_link" title="<%= t('links.title.edit_section', %{Edit Section}) %>" href="<%= context_url(@context, :context_section_url, section) %>"><i class="icon-edit standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.edit', %{Edit}) %></span></a>
+            <% end %>
+            <% if can_do(section, @current_user, :delete) %>
+              <% if section.deletable? %>
+                <a class="no-hover delete_section_link" title="<%= t('links.title.delete_section', %{Delete Section}) %>" href="<%= context_url(@context, :context_section_url, section) %>"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
+              <% else %>
+                <a class="no-hover cant_delete_section_link" href="#" title="<%= t('links.title.cant_delete', %{You can't delete sections that have users enrolled}) %>"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
+              <% end %>
+            <% end %>
+          </span>
           <div class="clear"></div>
         </li>
       <% end %>
       <li class="section_blank" style="display: none;">
-        <a href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" title="<%= t('links.title.delete_section', %{Delete Section}) %>" class="delete_section_link no-hover"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
-        <a class="edit_section_link no-hover" href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" title="<%= t('links.title.edit_section', %{Edit Section}) %>"><i class="icon-edit standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.edit', %{Edit}) %></span></a>
-        <a href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" class="name">
-        </a>
+        <a href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" class="name"></a>
+        <span class="section_links">
+          <a class="no-hover edit_section_link" href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" title="<%= t('links.title.edit_section', %{Edit Section}) %>"><i class="icon-edit standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.edit', %{Edit}) %></span></a>
+          <a class="delete_section_link" href="<%= context_url(@context, :context_section_url, "{{ id }}") %>" title="<%= t('links.title.delete_section', %{Delete Section}) %>" class="no-hover"><i class="icon-end standalone-icon"></i><span class="screen-reader-text"><%= t('images.alt.delete', %{Delete}) %></span></a>
+        </span>
         <div class="clear"></div>
       </li>
       <% if can_do(@context.course_sections.new, @current_user, :create) %>
         <li>
-          <% form_for :course_section, :url => context_url(@context, :context_sections_url), :html => {:id => "add_section_form", :class => "form-inline", :style => "margin-top: 20px;"} do |f| %>
+          <%= form_for :course_section, :url => context_url(@context, :context_sections_url), :html => {:id => "add_section_form", :class => "form-inline", :style => "margin-top: 20px;"} do |f| %>
             <h3><%= f.blabel :name, :course_section_name, :en => "Add a New Section" %></h3>
             <%= f.text_field :name %>
             <button class="btn btn-primary" type="submit"><i class="icon-add"></i> <%= t('buttons.add_section', %{Add Section}) %></button>
@@ -352,14 +377,10 @@ TEXT
         </li>
       <% end %>
     </ul>
-    <% form_for :course_section, :url => "", :html => {:id => "edit_section_form", :method => :put, :style => "display: none;"} do |f| %>
+    <%= form_for :course_section, :url => "", :html => {:id => "edit_section_form", :method => :put, :style => "display: none;"} do |f| %>
       <%= f.text_field :name %>
     <% end %>
   </div>
-  <% if can_see_users %>
-  <div id="tab-users">
-    <%= render :partial => 'user_tab' %></div>
-  <% end %>
   <% if can_do @context, @current_user, :update %>
 
   <div id="tab-navigation">
@@ -368,13 +389,13 @@ TEXT
 
       
       <%= t('navigation_keyboard_hint',
-        'To change the order of the course navigation links,
-        first turn the cursor off on your screen reader. Insert-z in JAWS.
-        Press tab to select first link.
-        Press up and down to select a link.
-        Press space to select a link to start dragging.
-        Then press up and down to select a destination.
-        Then press space a second time to drop link after destination.') %>
+        'If using a screen reader, to change the order of the course navigation links,
+        Turn off the virtual cursor or virtual buffer on your screen reader (press Insert-z for JAWS).
+        Press control-home to jump to the top of the page, then press the tab key until you reach the first course navigation link.
+        Press the up and down arrows until you hear the link you wish to move, and then press space to select it
+        Then, press the up and down arrow keys until you locate the new position.
+        Finally, press space again to place the link you are moving directly after the current link.
+        When finished, reenable the virtual buffer/cursor.') %>
     </div>
 
     <% keyboard_navigation([
@@ -383,7 +404,7 @@ TEXT
          {:key => t('keycodes.toggle_navigation_dragging', 'Space'), :description => t('keycode_descriptions.toggle_navigation_dragging', 'Select link to begin dragging, or drop previously selected link')}
      ]) %>
 
-    <% form_tag context_url(@context, :context_update_nav_url), {:id => "nav_form", :title => t('titles.edit_navigation', "Edit Course Navigation") } do %>
+    <%= form_tag context_url(@context, :context_update_nav_url), {:id => "nav_form", :title => t('titles.edit_navigation', "Edit Course Navigation") } do %>
       <input type="hidden" name="tabs_json" id="tabs_json" value="[]" />
       <% tabs = sortable_tabs %>
       <p style="margin-bottom: 4px; padding-top: 10px">
@@ -421,7 +442,6 @@ TEXT
 
   <% if can_do @context, @current_user, :update %>
     <div id="tab-tools">
-      <h2><%= t('headings.external_tools', %{External Tools}) %></h2>
       <%= render :partial => 'external_tools/external_tools', :object => @context.context_external_tools.active %>
     </div>
   <% end %>
@@ -429,7 +449,7 @@ TEXT
   <% if publishing_enabled %>
     <div id="tab-grade-publishing">
       <h2><%= t('headings.grade_publishing', %{Grade Publishing}) %></h2>
-      <% form_tag context_url(@context, :context_publish_to_sis_url), { :id => "publish_to_sis_form", :style => "display: none;" } do %><% end %>
+      <%= form_tag context_url(@context, :context_publish_to_sis_url), { :id => "publish_to_sis_form", :style => "display: none;" } do %><% end %>
       <a href="#" id="publish_grades_link" class="btn disabled">...</a>
       <ul id="publish_grades_messages"></ul>
     </div>
@@ -441,13 +461,17 @@ TEXT
       <%= render :partial => 'alerts/alerts' %>
     </div>
   <% end %>
+
+  <% if can_do @context, @current_user, :manage_feature_flags %>
+    <div id="tab-features"></div>
+  <% end %>
 </div><!-- end course details tab -->
 
 <% if Account.site_admin.grants_right?(@current_user, nil, :manage_courses) %>
   <div id="move_course_dialog" style="display: none;">
     <h2><%= t('headings.move_course', %{Move the course to another root account}) %></h2>
     <%= t('deatils.move_course', %{Select a new root account for this course.  After you move the course you'll want to specify a new department for the course as well.}) %>
-    <% form_for :course, :url => course_url(@context), :html => {:method => :put} do |f| %>
+    <%= form_for :course, :url => course_url(@context), :html => {:method => :put} do |f| %>
       <table class="formtable">
         <tr>
           <td>

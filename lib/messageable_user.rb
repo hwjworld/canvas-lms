@@ -51,7 +51,10 @@ class MessageableUser < User
   end
 
   def self.prepped(options={})
-    options = {:strict_checks => true}.merge(options)
+    options = {
+      :strict_checks => true,
+      :include_deleted => false
+    }.merge(options)
 
     # if either of our common course/group id columns are column names (vs.
     # integers), they need to go in the group by. we turn the first element
@@ -66,13 +69,15 @@ class MessageableUser < User
       columns.unshift(head)
     end
 
-    scope = self.scoped(
-      :select => MessageableUser.build_select(options),
-      :group => MessageableUser.connection.group_by(*columns),
-      :order => 'LOWER(COALESCE(users.short_name, users.name)), users.id')
+    scope = self.
+      select(MessageableUser.build_select(options)).
+      group(MessageableUser.connection.group_by(*columns)).
+      order("LOWER(COALESCE(users.short_name, users.name)), users.id")
 
     if options[:strict_checks]
       scope.where(AVAILABLE_CONDITIONS)
+    elsif !options[:include_deleted]
+      scope.where("users.workflow_state <> 'deleted'")
     else
       scope
     end
@@ -91,7 +96,10 @@ class MessageableUser < User
   end
 
   def self.individual_recipients(recipients)
-    recipients.grep(Calculator::INDIVIDUAL_RECIPIENT).map(&:to_i)
+    recipients.select{ |id|
+      !id.is_a?(String) ||
+      id =~ Calculator::INDIVIDUAL_RECIPIENT
+    }.map(&:to_i)
   end
 
   def common_groups
@@ -117,7 +125,10 @@ class MessageableUser < User
     if common_courses = read_attribute(:common_courses)
       common_courses.to_s.split(',').each do |common_course|
         course_id, role = common_course.split(':')
-        course_id = Shard.global_id_for(course_id.to_i)
+        course_id = course_id.to_i
+        # a course id of 0 indicates admin visibility without an actual shared
+        # course; don't "globalize" it
+        course_id = Shard.global_id_for(course_id) unless course_id.zero?
         @global_common_courses[course_id] ||= []
         @global_common_courses[course_id] << role
       end
@@ -133,6 +144,11 @@ class MessageableUser < User
     end
   end
 
+  def include_common_contexts_from(other)
+    combine_common_contexts(self.global_common_courses, other.global_common_courses)
+    combine_common_contexts(self.global_common_groups, other.global_common_groups)
+  end
+
   private
 
   def common_contexts_on_current_shard(common_contexts)
@@ -141,11 +157,60 @@ class MessageableUser < User
     return local_common_contexts if common_contexts.empty?
     Shard.partition_by_shard(common_contexts.keys) do |sharded_ids|
       sharded_ids.each do |id|
-        global_id = Shard.global_id_for(id)
+        # a context id of 0 indicates admin visibility without an actual shared
+        # context; don't "globalize" it
+        global_id = id == 0 ? id : Shard.global_id_for(id)
         id = global_id unless Shard.current == target_shard
         local_common_contexts[id] = common_contexts[global_id]
       end
     end
     local_common_contexts
+  end
+
+  def combine_common_contexts(left, right)
+    right.each{ |key,values| (left[key] ||= []).concat(values) }
+  end
+
+  # both bookmark_for and restrict_scope should always be executed on the
+  # same shard (not guaranteed, but we don't have to guarantee correctness if
+  # they aren't). so local ids here and local ids there have identical
+  # interpretation: local to Shard.current.
+  class MessageableUser::Bookmarker
+    def self.bookmark_for(user)
+      [(user.short_name || user.name).downcase, user.id]
+    end
+
+    def self.validate(bookmark)
+      bookmark.is_a?(Array) &&
+      bookmark.size == 2 &&
+      bookmark[0].is_a?(String) &&
+      bookmark[1].is_a?(Fixnum)
+    end
+
+    # ordering is already guaranteed
+    def self.restrict_scope(scope, pager)
+      if pager.current_bookmark
+        name, id = pager.current_bookmark
+        scope_shard = scope.scope(:find, :shard)
+        id = Shard.relative_id_for(id, scope_shard) if scope_shard
+
+        condition = [
+          <<-SQL,
+            LOWER(COALESCE(users.short_name, users.name)) > ? OR
+            LOWER(COALESCE(users.short_name, users.name)) = ? AND users.id > ?
+          SQL
+          name, name, id
+        ]
+
+        if pager.include_bookmark
+          condition[0] << "OR LOWER(COALESCE(users.short_name, users.name)) = ? AND users.id = ?"
+          condition.concat([name, id])
+        end
+
+        scope.where(condition)
+      else
+        scope
+      end
+    end
   end
 end

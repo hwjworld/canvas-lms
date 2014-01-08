@@ -1,31 +1,27 @@
 require([
   'i18n!accounts' /* I18n.t */,
   'jquery' /* $ */,
+  'compiled/util/addPrivacyLinkToDialog',
   'user_sortable_name',
   'jquery.instructure_forms' /* formSubmit */,
   'jqueryui/dialog',
   'compiled/jquery/fixDialogButtons' /* fix dialog formatting */,
   'compiled/jquery.rails_flash_notifications'
-], function(I18n, $) {
+], function(I18n, $, addPrivacyLinkToDialog) {
 
   $(".add_user_link").click(function(event) {
     event.preventDefault();
     $("#add_user_form :text").val("");
-    var $dialog = $("#add_user_dialog"),
-        $privacy = $('<a>', {href: "http://www.instructure.com/privacy-policy", style: "padding-left: 1em; line-height: 3em", 'class': 'privacy_policy_link', target: "_blank"}),
-        $buttonPane;
+    var $dialog = $("#add_user_dialog");
     $dialog.dialog({
       title: I18n.t('add_user_dialog_title', "Add a New User"),
       width: 500
     }).fixDialogButtons();
-    $buttonPane = $dialog.closest('.ui-dialog').find('.ui-dialog-buttonpane');
-    if (!$buttonPane.find('.privacy_policy_link').length) {
-      $privacy.text(I18n.t('#site.view_privacy_policy', 'View Privacy Policy'));
-      $dialog.closest('.ui-dialog').find('.ui-dialog-buttonpane').append($privacy);
-    }
+    addPrivacyLinkToDialog($dialog);
     $("#add_user_form :text:visible:first").focus().select();
   });
   $("#add_user_form").formSubmit({
+    formErrors: false,
     required: ['user[name]'],
     beforeSubmit: function(data) {
       $(this).find("button").attr('disabled', true)
@@ -46,6 +42,23 @@ require([
       $("#add_user_dialog").dialog('close');
     },
     error: function(data) {
+      errorData = {};
+
+      // Email errors
+      if(data.pseudonym.unique_id){
+        errorList = [];
+
+        $.each(data.pseudonym.unique_id, function(i){
+          if(this.message){
+            errorList.push(this.message);
+          }
+        });
+
+        errorData['unique_id'] = errorList.join(', ');
+      }
+
+      $(this).formErrors(errorData);
+
       $(this).find("button").attr('disabled', false)
         .filter(".submit_button").text(I18n.t('user_add_failed_message', "Adding User Failed, please try again"));
     }

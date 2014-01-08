@@ -16,85 +16,89 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'action_controller_test_process'
+
 # @API Submissions
 #
 # @object Submission
 #     {
 #       // The submission's assignment id
-#       assignment_id: 23,
+#       "assignment_id": 23,
 #
 #       // The submission's assignment (see the assignments API) (optional)
-#       assignment: Assignment
+#       "assignment": "Assignment",
 #
 #       // The submission's course (see the course API) (optional)
-#       course: Course
+#       "course": "Course",
 #
 #       // This is the submission attempt number.
-#       attempt: 1,
+#       "attempt": 1,
 #
 #       // The content of the submission, if it was submitted directly in a
 #       // text field.
-#       body: "There are three factors too...",
+#       "body": "There are three factors too...",
 #
 #       // The grade for the submission, translated into the assignment grading
 #       // scheme (so a letter grade, for example).
-#       grade: "A-",
+#       "grade": "A-",
 #
 #       // A boolean flag which is false if the student has re-submitted since
 #       // the submission was last graded.
-#       grade_matches_current_submission: true,
+#       "grade_matches_current_submission": true,
 #
 #       // URL to the submission. This will require the user to log in.
-#       html_url: "http://example.com/courses/255/assignments/543/submissions/134",
+#       "html_url": "http://example.com/courses/255/assignments/543/submissions/134",
 #
 #       // URL to the submission preview. This will require the user to log in.
-#       preview_url: "http://example.com/courses/255/assignments/543/submissions/134?preview=1",
+#       "preview_url": "http://example.com/courses/255/assignments/543/submissions/134?preview=1",
 #
 #       // The raw score
-#       score: 13.5
+#       "score": 13.5,
 #
 #       // Associated comments for a submission (optional)
-#       submission_comments: [
+#       "submission_comments": [
 #         {
-#           author_id: 134
-#           author_name: "Toph Beifong",
-#           comment: "Well here's the thing...",
-#           created_at: "2012-01-01T01:00:00Z",
-#           media_comment: {
-#             content-type: "audio/mp4",
-#             display_name: "something",
-#             media_id: "3232",
-#             media_type: "audio",
-#             url:  "http://example.com/media_url"
+#           "id": 37,
+#           "author_id": 134,
+#           "author_name": "Toph Beifong",
+#           "comment": "Well here's the thing...",
+#           "created_at": "2012-01-01T01:00:00Z",
+#           "media_comment": {
+#             "content-type": "audio/mp4",
+#             "display_name": "something",
+#             "media_id": "3232",
+#             "media_type": "audio",
+#             "url":  "http://example.com/media_url"
 #           }
 #         }
 #       ],
 #
 #       // The types of submission
 #       // ex: ("online_text_entry"|"online_url"|"online_upload"|"media_recording")
-#       submission_type: "online_text_entry",
+#       "submission_type": "online_text_entry",
 #
 #       // The timestamp when the assignment was submitted
-#       submitted_at: "2012-01-01T01:00:00Z",
+#       "submitted_at": "2012-01-01T01:00:00Z",
 #
 #       // The URL of the submission (for "online_url" submissions).
-#       url: null,
+#       "url": null,
 #
 #       // The id of the user who created the submission
-#       user_id: 134
+#       "user_id": 134,
 #
 #       // The id of the user who graded the submission
-#       grader_id: 86
+#       "grader_id": 86,
 #
 #       // The submissions user (see user API) (optional)
-#       user: User
+#       "user": "User",
 #
 #       // Whether the submission was made after the applicable due date
-#       late: false
+#       "late": false
 #     }
 #
 class SubmissionsController < ApplicationController
   include GoogleDocs
+  include KalturaHelper
   before_filter :get_course_from_section, :only => :create
   before_filter :require_context
 
@@ -104,7 +108,7 @@ class SubmissionsController < ApplicationController
     @assignment = @context.assignments.active.find(params[:assignment_id])
     if authorized_action(@assignment, @current_user, :grade)
       if params[:zip]
-        submission_zip
+        generate_submission_zip(@assignment, @context)
       else
         respond_to do |format|
           format.html { redirect_to named_context_url(@context, :context_assignment_url, @assignment.id) }
@@ -129,7 +133,12 @@ class SubmissionsController < ApplicationController
       end
       return
     end
-    @submission = @assignment.find_submission(@user) #_params[:.find(:first, :conditions => {:assignment_id => @assignment.id, :user_id => params[:id]})
+
+    hash = {:CONTEXT_ACTION_SOURCE => :submissions}
+    append_sis_data(hash)
+    js_env(hash)
+
+    @submission = @assignment.find_submission(@user)
     @submission ||= @context.submissions.build(:user => @user, :assignment_id => @assignment.id)
     @submission.grants_rights?(@current_user, session)
     @rubric_association = @assignment.rubric_association
@@ -138,7 +147,7 @@ class SubmissionsController < ApplicationController
     if @assignment.muted? && !@submission.grants_right?(@current_user, :read_grade)
       @visible_rubric_assessments = []
     else
-      @visible_rubric_assessments = @submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, session, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? '0' : '1', a.assessor_name] }
+      @visible_rubric_assessments = @submission.rubric_assessments.select{|a| a.grants_rights?(@current_user, session, :read)[:read]}.sort_by{|a| [a.assessment_type == 'grading' ? SortFirst : SortLast, Canvas::ICU.collation_key(a.assessor_name)] }
     end
 
     @assessment_request = @submission.assessment_requests.find_by_assessor_id(@current_user.id) rescue nil
@@ -146,9 +155,7 @@ class SubmissionsController < ApplicationController
       respond_to do |format|
         json_handled = false
         if params[:preview]
-          # this if was put it by ryan, it makes it so if they pass a ?preview=true&version=2 in the url that it will load the second version in the
-          # submission_history of that submission
-          if params[:version]
+          if params[:version] && !@assignment.quiz
             @submission = @submission.submission_history[params[:version].to_i]
           end
 
@@ -156,7 +163,16 @@ class SubmissionsController < ApplicationController
           if @assignment.quiz && @context.is_a?(Course) && @context.user_is_student?(@current_user) && !@context.user_is_instructor?(@current_user)
             format.html { redirect_to(named_context_url(@context, :context_quiz_url, @assignment.quiz.id, :headless => 1)) }
           elsif @submission.submission_type == "online_quiz" && @submission.quiz_submission_version
-            format.html { redirect_to(named_context_url(@context, :context_quiz_history_url, @assignment.quiz.id, :user_id => @submission.user_id, :headless => 1, :version => @submission.quiz_submission_version)) }
+            format.html {
+              quiz_params = {
+                headless: 1,
+                user_id: @submission.user_id,
+                version: params[:version] || @submission.quiz_submission_version
+              }
+              redirect_to named_context_url(@context,
+                                            :context_quiz_history_url,
+                                            @assignment.quiz.id, quiz_params)
+            }
           else
             format.html { render :action => "show_preview" }
           end
@@ -179,7 +195,7 @@ class SubmissionsController < ApplicationController
             end
           }
           json_handled = true
-          format.json { render :json => @attachment.to_json(:permissions => {:user => @current_user}) }
+          format.json { render :json => @attachment.as_json(:permissions => {:user => @current_user}) }
         else
           @submission.limit_comments(@current_user, session)
           format.html
@@ -188,7 +204,7 @@ class SubmissionsController < ApplicationController
           format.json { 
             @submission.limit_comments(@current_user, session)
             excludes = @assignment.grants_right?(@current_user, session, :grade) ? [:grade, :score] : []
-            render :json => @submission.to_json(
+            render :json => @submission.as_json(
               Submission.json_serialization_full_parameters(
                 :exclude => excludes,
                 :except  => %w(quiz_submission submission_history)
@@ -219,9 +235,10 @@ class SubmissionsController < ApplicationController
   # * Media comments can be submitted, however, there is no API yet for creating a media comment to submit.
   # * Integration with Google Docs is not yet supported.
   #
-  # @argument comment[text_comment] Include a textual comment with the submission.
+  # @argument comment[text_comment] [String]
+  #   Include a textual comment with the submission.
   #
-  # @argument submission[submission_type] [Required, "online_text_entry"|"online_url"|"online_upload"|"media_recording"]
+  # @argument submission[submission_type] [String, "online_text_entry"|"online_url"|"online_upload"|"media_recording"]
   #   The type of submission being made. The assignment submission_types must
   #   include this submission type as an allowed option, or the submission will be rejected with a 400 error.
   #
@@ -230,33 +247,36 @@ class SubmissionsController < ApplicationController
   #   set to "online_url", otherwise the submission[url] parameter will be
   #   ignored.
   #
-  # @argument submission[body] Submit the assignment as an HTML document
-  #   snippet. Note this HTML snippet will be sanitized using the
-  #   same ruleset as a submission made from the Canvas web UI. The sanitized
-  #   HTML will be returned in the response as the submission body. Requires a
-  #   submission_type of "online_text_entry".
+  # @argument submission[body] [String]
+  #   Submit the assignment as an HTML document snippet. Note this HTML snippet
+  #   will be sanitized using the same ruleset as a submission made from the
+  #   Canvas web UI. The sanitized HTML will be returned in the response as the
+  #   submission body. Requires a submission_type of "online_text_entry".
   #
-  # @argument submission[url] Submit the assignment as a URL. The URL scheme
-  #   must be "http" or "https", no "ftp" or other URL schemes are allowed. If no
-  #   scheme is given (e.g. "www.example.com") then "http" will be assumed.
-  #   Requires a submission_type of "online_url".
+  # @argument submission[url] [String]
+  #   Submit the assignment as a URL. The URL scheme must be "http" or "https",
+  #   no "ftp" or other URL schemes are allowed. If no scheme is given (e.g.
+  #   "www.example.com") then "http" will be assumed. Requires a submission_type
+  #   of "online_url".
   #
-  # @argument submission[file_ids][] Submit the assignment as a set of
-  #   one or more previously uploaded files residing in the submitting user's
-  #   files section (or the group's files section, for group assignments).
+  # @argument submission[file_ids][] [Integer]
+  #   Submit the assignment as a set of one or more previously uploaded files
+  #   residing in the submitting user's files section (or the group's files
+  #   section, for group assignments).
   #
   #   To upload a new file to submit, see the submissions {api:SubmissionsApiController#create_file Upload a file API}.
   #
   #   Requires a submission_type of "online_upload".
   #
-  # @argument submission[media_comment_id] The media comment id to submit.
-  #   Media comment ids can be submitted via this API, however, note that there
-  #   is not yet an API to generate or list existing media comments, so this
-  #   functionality is currently of limited use.
+  # @argument submission[media_comment_id] [Integer]
+  #   The media comment id to submit. Media comment ids can be submitted via
+  #   this API, however, note that there is not yet an API to generate or list
+  #   existing media comments, so this functionality is currently of limited use.
   #
   #   Requires a submission_type of "media_recording".
   #
-  # @argument submission[media_comment_type] ["audio"|"video"] The type of media comment being submitted.
+  # @argument submission[media_comment_type] [String, "audio"|"video"]
+  #   The type of media comment being submitted.
   #
   def create
     params[:submission] ||= {}
@@ -285,6 +305,10 @@ class SubmissionsController < ApplicationController
           return render(:json => { :message => "Invalid parameters for submission_type #{submission_type}. Required: #{API_SUBMISSION_TYPES[submission_type].map { |p| "submission[#{p}]" }.join(", ") }" }, :status => 400)
         end
         params[:submission][:comment] = params[:comment].try(:delete, :text_comment)
+
+        if params[:submission].has_key?(:body)
+          params[:submission][:body] = process_incoming_html_content(params[:submission][:body])
+        end
       end
 
       if params[:submission][:file_ids].is_a?(Array)
@@ -331,28 +355,12 @@ class SubmissionsController < ApplicationController
         end
       elsif !api_request? && params[:google_doc] && params[:google_doc][:document_id] && params[:submission][:submission_type] == "google_doc"
         params[:submission][:submission_type] = 'online_upload'
-        doc_response, display_name, file_extension = google_docs_download(params[:google_doc][:document_id])
-        unless doc_response && doc_response.is_a?(Net::HTTPOK)
-          # couldn't get document
-          flash[:error] = t('errors.assignment_submit_fail', "Assignment failed to submit")
-          redirect_to course_assignment_url(@context, @assignment)
+        attachment = submit_google_doc(params[:google_doc][:document_id])
+        if attachment
+          params[:submission][:attachments] << attachment
+        else
           return
         end
-        filename = "google_doc_#{Time.now.strftime("%Y%m%d%H%M%S")}#{@current_user.id}.#{file_extension}"
-        path = File.join("tmp", filename)
-        f = File.new(path, 'wb')
-        f.write doc_response.body
-        f.close
-
-        require 'action_controller'
-        require 'action_controller/test_process.rb'
-        @attachment = @assignment.attachments.new(
-          :uploaded_data => ActionController::TestUploadedFile.new(path, doc_response.content_type, true), 
-          :display_name => "#{display_name}",
-          :user => @current_user
-        )
-        @attachment.save!
-        params[:submission][:attachments] << @attachment
       elsif !api_request? && params[:submission][:submission_type] == 'media_recording' && params[:submission][:media_comment_id].blank?
         flash[:error] = t('errors.media_file_attached', "There was no media recording in the submission")
         return redirect_to named_context_url(@context, :context_assignment_url, @assignment)
@@ -371,7 +379,7 @@ class SubmissionsController < ApplicationController
             flash[:error] = t('errors.assignment_submit_fail', "Assignment failed to submit")
             redirect_to course_assignment_url(@context, @assignment)
           }
-          format.json { render :json => e.record.errors.to_json, :status => :bad_request }
+          format.json { render :json => e.record.errors, :status => :bad_request }
         end
         return
       end
@@ -387,7 +395,7 @@ class SubmissionsController < ApplicationController
             if api_request?
               render :json => submission_json(@submission, @assignment, @current_user, session, @context, %{submission_comments attachments}), :status => :created, :location => api_v1_course_assignment_submission_url(@context, @assignment, @current_user)
             else
-              render :json => @submission.to_json(:include => :submission_comments), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
+              render :json => @submission.as_json(:include => :submission_comments), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
             end
           }
         else
@@ -395,11 +403,48 @@ class SubmissionsController < ApplicationController
             flash[:error] = t('errors.assignment_submit_fail', "Assignment failed to submit")
             render :action => "show", :id => @submission.assignment.context.id
           }
-          format.json { render :json => @submission.errors.to_json, :status => :bad_request }
+          format.json { render :json => @submission.errors, :status => :bad_request }
         end
       end
     end
   end
+
+  # Internal: Submit a Google Doc.
+  def submit_google_doc(document_id)
+    # fetch document from google
+    document_response, display_name, file_extension = google_docs_download(document_id)
+
+    # error handling
+    unless document_response.try(:is_a?, Net::HTTPOK)
+      flash[:error] = t('errors.assignment_submit_fail', 'Assignment failed to submit')
+    end
+
+    restriction_enabled           = @domain_root_account.feature_enabled?(:google_docs_domain_restriction)
+    restricted_google_docs_domain = @domain_root_account.settings[:google_docs_domain]
+    if restriction_enabled && !@current_user.gmail.match(%r{@#{restricted_google_docs_domain}$})
+      flash[:error] = t('errors.invalid_google_docs_domain', 'You cannot submit assignments from this google_docs domain')
+    end
+
+    if flash[:error]
+      redirect_to(course_assignment_url(@context, @assignment))
+      return false
+    end
+
+    # process the file and create an attachment
+    filename = "google_doc_#{Time.now.strftime("%Y%m%d%H%M%S")}#{@current_user.id}.#{file_extension}"
+    path     = File.join("tmp", filename)
+    File.open(path, 'wb') do |f|
+      f.write(document_response.body)
+    end
+
+    @attachment = @assignment.attachments.new(
+      uploaded_data: ActionController::TestUploadedFile.new(path, document_response.content_type, true),
+      display_name: display_name, user: @current_user
+    )
+    @attachment.save!
+    @attachment
+  end
+  protected :submit_google_doc
 
   def turnitin_report
     return render(:nothing => true, :status => 400) unless params_are_integers?(:assignment_id, :submission_id)
@@ -439,13 +484,13 @@ class SubmissionsController < ApplicationController
     @assignment = @context.assignments.active.find(params[:assignment_id])
     @user = @context.all_students.find(params[:id])
     @submission = @assignment.find_or_create_submission(@user)
-    if params[:submission][:student_entered_score] && @submission.grants_right?(@current_user, session, :comment)#&& @submission.user == @current_user
-      @submission.student_entered_score = params[:submission][:student_entered_score].to_f
-      @submission.student_entered_score = nil if !params[:submission][:student_entered_score] || params[:submission][:student_entered_score] == "" || params[:submission][:student_entered_score] == "null"
-      @submission.save
-      render :json => @submission.to_json
+
+    if params[:submission][:student_entered_score] && @submission.grants_right?(@current_user, session, :comment)
+      update_student_entered_score(params[:submission][:student_entered_score])
+      render :json => @submission
       return
     end
+
     if authorized_action(@submission, @current_user, :comment)
       params[:submission][:commenter] = @current_user
       admin_in_context = !@context_enrollment || @context_enrollment.admin?
@@ -490,17 +535,17 @@ class SubmissionsController < ApplicationController
             :comments => admin_in_context ? :submission_comments : :visible_submission_comments
           }).merge(:permissions => { :user => @current_user, :session => session, :include_permissions => false })
           format.json { 
-            render :json => @submissions.to_json(json_args), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
+            render :json => @submissions.map{ |s| s.as_json(json_args) }, :status => :created, :location => course_gradebook_url(@submission.assignment.context)
           }
           format.text { 
-            render :json => @submissions.to_json(json_args), :status => :created, :location => course_gradebook_url(@submission.assignment.context)
+            render :json => @submissions.map{ |s| s.as_json(json_args) }, :status => :created, :location => course_gradebook_url(@submission.assignment.context)
           }
         else
           @error_message = t('errors_update_failed', "Update Failed")
           flash[:error] = @error_message
           format.html { render :action => "show", :id => @assignment.context.id }
-          format.json { render :json => {:errors => {:base => @error_message}}.to_json, :status => :bad_request }
-          format.text { render :json => {:errors => {:base => @error_message}}.to_json, :status => :bad_request }
+          format.json { render :json => {:errors => {:base => @error_message}}, :status => :bad_request }
+          format.text { render :json => {:errors => {:base => @error_message}}, :status => :bad_request }
         end
       end
     end
@@ -508,40 +553,53 @@ class SubmissionsController < ApplicationController
 
   protected
 
-  def submission_zip
-    @attachments = @assignment.attachments.find(:all, :conditions => ["display_name='submissions.zip' AND workflow_state IN ('to_be_zipped', 'zipping', 'zipped', 'errored') AND user_id=?", @current_user.id], :order => :created_at)
-    @attachment = @attachments.pop
-    @attachments.each{|a| a.destroy! }
-    if @attachment && (@attachment.created_at < 1.hour.ago || @attachment.created_at < (@assignment.submissions.map{|s| s.submitted_at}.compact.max || @attachment.created_at))
-      @attachment.destroy!
-      @attachment = nil
-    end
-    if !@attachment
-      @attachment = @assignment.attachments.build(:display_name => 'submissions.zip')
-      @attachment.workflow_state = 'to_be_zipped'
-      @attachment.file_state = '0'
-      @attachment.user = @current_user
-      @attachment.save!
-      ContentZipper.send_later_enqueue_args(:process_attachment, { :priority => Delayed::LOW_PRIORITY, :max_attempts => 1 }, @attachment)
-      render :json => @attachment.to_json
+  def update_student_entered_score(score)
+    if score.present? && score != "null"
+      @submission.student_entered_score = score.to_f.round(2)
     else
-      respond_to do |format|
-        if @attachment.zipped?
-          if Attachment.s3_storage?
-            format.html { redirect_to @attachment.cacheable_s3_inline_url }
-            format.zip { redirect_to @attachment.cacheable_s3_inline_url }
-          else
-            cancel_cache_buster
-            format.html { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
-            format.zip { send_file(@attachment.full_filename, :type => @attachment.content_type_with_encoding, :disposition => 'inline') }
-          end
-          format.json { render :json => @attachment.to_json(:methods => :readable_size) }
+      @submission.student_entered_score = nil
+    end
+    @submission.save
+  end
+
+  def generate_submission_zip(assignment, context)
+    attachment = submission_zip(assignment)
+
+    respond_to do |format|
+      if attachment.zipped?
+        if Attachment.s3_storage?
+          format.html { redirect_to attachment.cacheable_s3_inline_url }
+          format.zip { redirect_to attachment.cacheable_s3_inline_url }
         else
-          flash[:notice] = t('still_zipping', "File zipping still in process...")
-          format.html { redirect_to named_context_url(@context, :context_assignment_url, @assignment.id) }
-          format.zip { redirect_to named_context_url(@context, :context_assignment_url, @assignment.id) }
-          format.json { render :json => @attachment.to_json }
+          cancel_cache_buster
+
+          format.html do
+            send_file(attachment.full_filename, {
+              :type => attachment.content_type_with_encoding,
+              :disposition => 'inline'
+            })
+          end
+
+          format.zip do
+            send_file(attachment.full_filename, {
+              :type => attachment.content_type_with_encoding,
+              :disposition => 'inline'
+            })
+          end
         end
+        format.json { render :json => attachment.as_json(:methods => :readable_size) }
+      else
+        flash[:notice] = t('still_zipping', "File zipping still in process...")
+
+        format.html do
+          redirect_to named_context_url(context, :context_assignment_url, assignment.id)
+        end
+
+        format.zip do
+          redirect_to named_context_url(context, :context_assignment_url, assignment.id)
+        end
+
+        format.json { render :json => attachment }
       end
     end
   end

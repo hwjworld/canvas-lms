@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -75,6 +75,10 @@ module Api::V1::User
     end
   end
 
+  def users_json(users, current_user, session, includes = [], context = @context, enrollments = nil)
+    users.map{ |user| user_json(user, current_user, session, includes, context, enrollments) }
+  end
+
   # this mini-object is used for secondary user responses, when we just want to
   # provide enough information to display a user.
   # for instance, discussion entries return this json as a sub-object.
@@ -135,13 +139,14 @@ module Api::V1::User
     api_json(enrollment, user, session, :only => API_ENROLLMENT_JSON_OPTS).tap do |json|
       json[:enrollment_state] = json.delete('workflow_state')
       json[:role] = enrollment.role
+      json[:last_activity_at] = enrollment.last_activity_at
       if enrollment.student?
         json[:grades] = {
           :html_url => course_student_grades_url(enrollment.course_id, enrollment.user_id),
         }
 
         if has_grade_permissions?(user, enrollment)
-          %w{current_score final_score}.each do |method|
+          %w{current_score final_score current_grade final_grade}.each do |method|
             json[:grades][method.to_sym] = enrollment.send("computed_#{method}")
           end
         end
@@ -155,7 +160,7 @@ module Api::V1::User
         json[:locked] = lockedbysis
       end
       if includes.include?('observed_users') && enrollment.observer? && enrollment.associated_user
-        json[:observed_user] = user_json(enrollment.associated_user, user, session, user_includes, @context, enrollment.associated_user.not_ended_enrollments.all_student)
+        json[:observed_user] = user_json(enrollment.associated_user, user, session, user_includes, @context, enrollment.associated_user.not_ended_enrollments.all_student.where(:course_id => enrollment.course_id))
       end
     end
   end

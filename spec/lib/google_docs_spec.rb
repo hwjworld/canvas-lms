@@ -149,6 +149,26 @@ describe GoogleDocs do
     end
   end
 
+  describe "#google_docs_acl_add" do
+    let(:doc_response) { mock }
+
+    it "should add users to a document" do
+      doc_response.stubs(:entries).returns([])
+      lib.expects(:send_feed).returns(doc_response)
+      lib.expects(:user_feed_entry).with(@user)
+
+      lib.google_docs_acl_add('12345', [@user], nil)
+    end
+
+    it "should optionally filter by domain" do
+      doc_response.stubs(:entries).returns([])
+      lib.expects(:send_feed).returns(doc_response)
+      lib.expects(:user_feed_entry).never
+
+      lib.google_docs_acl_add('12345', [@user], 'does-not-match.com')
+    end
+  end
+
   describe '#google_docs_retrieve_access_token' do
     it "should use the real_current_user if possible" do
       lib = GoogleDocsTest.new nil, @user, User.create!
@@ -191,9 +211,9 @@ describe GoogleDocs do
   # ----------------------------
 
   def google_doc_settings
-    path = RAILS_ROOT + "/config/google_docs.yml"
+    path = Rails.root+"config/google_docs.yml"
     if File.exists?(path)
-      YAML.load_file(path)[RAILS_ENV]
+      YAML.load_file(path)[Rails.env]
     else
       {
         'test_user_token' => 'u_token',

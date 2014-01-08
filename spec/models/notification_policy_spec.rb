@@ -36,49 +36,40 @@ describe NotificationPolicy do
 
   it "should cause message dispatch to specified channel on triggered policies" do
     policy_setup
-    @assignment.unpublish!
-    @assignment.previously_published = false
-    @assignment.save
     @default_cc = @student.communication_channels.create(:path => "default@example.com")
     @default_cc.confirm!
     @cc = @student.communication_channels.create(:path => "secondary@example.com")
     @cc.confirm!
     @policy = NotificationPolicy.create(:notification => @notif, :communication_channel => @cc, :frequency => "immediately")
-    @assignment.publish!
-    @assignment.messages_sent.should be_include("Assignment Graded")
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "default@example.com"}
+    @assignment = @course.assignments.create!(:title => "test assignment")
+    @assignment.messages_sent.should be_include("Assignment Created")
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "default@example.com"}
     m.should be_nil
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "secondary@example.com"}
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "secondary@example.com"}
     m.should_not be_nil
   end
   
   it "should prevent message dispatches if set to 'never' on triggered policies" do
     policy_setup
-    @assignment.unpublish!
     @cc = @student.communication_channels.create(:path => "secondary@example.com")
     @cc.confirm!
     @policy = NotificationPolicy.create(:notification => @notif, :communication_channel => @cc, :frequency => "never")
-    @assignment.previously_published = false
-    @assignment.save
-    @assignment.publish!
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "default@example.com"}
+    @assignment = @course.assignments.create!(:title => "test assignment")
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "default@example.com"}
     m.should be_nil
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "secondary@example.com"}
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "secondary@example.com"}
     m.should be_nil
   end
 
   it "should prevent message dispatches if no policy setting exists" do
     policy_setup
-    @assignment.unpublish!
     @cc = @student.communication_channels.create(:path => "secondary@example.com")
     @cc.confirm!
-    NotificationPolicy.delete_all(:notification_id => @notif.id, :communication_channel_id => @cc.id)
-    @assignment.previously_published = false
-    @assignment.save
-    @assignment.publish!
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "default@example.com"}
+    NotificationPolicy.where(:notification_id => @notif, :communication_channel_id => @cc).delete_all
+    @assignment = @course.assignments.create!(:title => "test assignment")
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "default@example.com"}
     m.should be_nil
-    m = @assignment.messages_sent["Assignment Graded"].find{|m| m.to == "secondary@example.com"}
+    m = @assignment.messages_sent["Assignment Created"].find{|m| m.to == "secondary@example.com"}
     m.should be_nil
   end
 
@@ -89,7 +80,7 @@ describe NotificationPolicy do
     Message.any_instance.stubs(:get_template).returns("here's a free <%= data.favorite_soda %>")
     class DataTest < ActiveRecord::Base
       set_table_name :courses
-      attr_accessible :id
+      attr_protected
       has_a_broadcast_policy
       set_broadcast_policy do
         dispatch :hello
@@ -107,7 +98,10 @@ describe NotificationPolicy do
         data { {:favorite_soda => 'mtn dew'} }
       end
     end
-    dt = DataTest.new
+    dt = DataTest.new(account_id: Account.default.id,
+                      root_account_id: Account.default.id,
+                      enrollment_term_id: Account.default.default_enrollment_term.id,
+                      workflow_state: 'created')
     dt.save!
     msg = dt.messages_sent["Hello"].find { |m| m.to == "blarg@example.com" }
     msg.should_not be_nil
@@ -134,10 +128,11 @@ describe NotificationPolicy do
     
     context "by" do
       before do
-        @n1 = notification_policy_model(:frequency => 'immediately')
-        @n2 = notification_policy_model(:frequency => 'daily')
-        @n3 = notification_policy_model(:frequency => 'weekly')
-        @n4 = notification_policy_model(:frequency => 'never')
+        user_with_pseudonym(:active_all => 1)
+        @n1 = notification_policy_model(:frequency => 'immediately', :communication_channel => @cc)
+        @n2 = notification_policy_model(:frequency => 'daily', :communication_channel => @cc)
+        @n3 = notification_policy_model(:frequency => 'weekly', :communication_channel => @cc)
+        @n4 = notification_policy_model(:frequency => 'never', :communication_channel => @cc)
       end
       
       it "should have a scope to differentiate by frequency" do
@@ -171,7 +166,7 @@ describe NotificationPolicy do
     
     it "should find all daily and weekly policies for the user, communication_channel, and notification" do
       user_model
-      communication_channel_model(:user_id => @user.id)
+      communication_channel_model
       notification_model
 
       NotificationPolicy.delete_all
@@ -200,7 +195,7 @@ describe NotificationPolicy do
   describe "setup_for" do
     it "should not fail when params does not include a user, and the account doesn't allow scores in e-mails" do
       user_model
-      communication_channel_model(:user_id => @user.id)
+      communication_channel_model
       notify1 = notification_model(:name => 'Setting 1', :category => 'MultiCategory')
       params = { :channel_id => @communication_channel.id }
       params[:root_account] = Account.default
@@ -210,7 +205,7 @@ describe NotificationPolicy do
 
     it "should set all notification entries within the same category" do
       user_model
-      communication_channel_model(:user_id => @user.id)
+      communication_channel_model
       notify1 = notification_model(:name => 'Setting 1', :category => 'MultiCategory')
       notify2 = notification_model(:name => 'Setting 2', :category => 'MultiCategory')
 
@@ -233,7 +228,7 @@ describe NotificationPolicy do
   describe "setup_with_default_policies" do
     before :each do
       user_model
-      communication_channel_model(:user_id => @user.id)
+      communication_channel_model
       @announcement = notification_model(:name => 'Setting 1', :category => 'Announcement')
     end
 
@@ -263,7 +258,7 @@ describe NotificationPolicy do
       NotificationPolicy.delete_all
       # Setup the second channel (higher position)
       primary_channel   = @user.communication_channel
-      secondary_channel = communication_channel_model(:user_id => @user.id, :path => 'secondary@example.com')
+      secondary_channel = communication_channel_model(:path => 'secondary@example.com')
       # start out with 0 on primary and secondary
       primary_channel.notification_policies.count.should == 0
       secondary_channel.notification_policies.count.should == 0
@@ -278,7 +273,7 @@ describe NotificationPolicy do
       NotificationPolicy.delete_all
       # Setup the second channel (higher position)
       primary_channel   = @user.communication_channel
-      secondary_channel = communication_channel_model(:user_id => @user.id, :path => 'secondary@example.com')
+      secondary_channel = communication_channel_model(:path => 'secondary@example.com')
       secondary_channel.notification_policies.create!(:notification => @notification, :frequency => Notification::FREQ_NEVER)
       NotificationPolicy.setup_with_default_policies(@user, [@announcement])
       # Primary should have 1 created and secondary should be left alone.
@@ -293,12 +288,12 @@ describe NotificationPolicy do
     end
 
     context "across shards" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should find user categories accross shards" do
         @shard1.activate {
           @shard_user = user_model
-          @channel = communication_channel_model(:user_id => @shard_user.id)
+          @channel = communication_channel_model(:user => @shard_user)
           NotificationPolicy.delete_all
           @policy = @channel.notification_policies.create!(:notification => @notification, :frequency => Notification::FREQ_NEVER)
           NotificationPolicy.setup_with_default_policies(@shard_user, [@announcement])
@@ -311,12 +306,11 @@ end
 
 def policy_setup
   @course = factory_with_protected_attributes(Course, :name => "test course", :workflow_state => "available")
-  @assignment = @course.assignments.create(:title => "test assignment")
   @student = factory_with_protected_attributes(User, :name => "student", :workflow_state => "registered")
   e = @course.enroll_student(@student)
   e.accept!
-  Notification.find(:all).each{|n| n.destroy }
-  @notif = Notification.create!(:name => "Assignment Graded", :subject => "Test", :category => 'TestNever')
+  Notification.all.each{|n| n.destroy }
+  @notif = Notification.create!(:name => "Assignment Created", :subject => "Test", :category => 'TestNever')
 end
 
 describe NotificationPolicy, "communication_preference" do
@@ -324,7 +318,7 @@ describe NotificationPolicy, "communication_preference" do
   before(:each) do
     @cc1 = mock('CommunicationChannel')
     @cc2 = mock('CommunicationChannel')
-    @user = mock('User')
+    @user = User.create!
     @user.stubs(:communication_channel).returns(@cc1)
     notification_policy_model
     @notification_policy.stubs(:user).returns(@user)

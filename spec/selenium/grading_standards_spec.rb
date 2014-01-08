@@ -11,10 +11,10 @@ describe "grading standards" do
     standard = f("#grading_standard_new")
     standard.should_not be_nil
     standard.should have_class(/editing/)
-    standard.find_elements(:css, ".delete_row_link").select(&:displayed?).each_with_index do |link, i|
+    driver.execute_script("return $('#grading_standard_new .delete_row_link').toArray();").select(&:displayed?).each_with_index do |link, i|
       if i % 2 == 1
-        link.click
-        wait_for_animations
+        driver.execute_script("$('#grading_standard_new .delete_row_link:eq(#{i})').click()")
+        wait_for_js
         keep_trying_until { !link.should_not be_displayed }
       end
     end
@@ -127,8 +127,8 @@ describe "grading standards" do
     get "/courses/#{@course.id}/grades/#{student.id}"
     grading_scheme = driver.execute_script "return grading_scheme"
     grading_scheme[2][0].should == 'B+'
-    driver.find_element(:css, '#right-side .final_grade .grade').text.should == '89.9'
-    driver.find_element(:css, '#final_letter_grade_text').text.should == 'B+'
+    f("#right-side .final_grade .grade").text.should == '89.9'
+    f("#final_letter_grade_text").text.should == 'B+'
   end
 
   it "should allow editing the standard again without reloading the page" do

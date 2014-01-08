@@ -105,22 +105,25 @@
               <td>
                 <div class="essay_answers">
                   <% question[:essay_responses].reverse.each do |response| %>
-                        <div class="essay_answer" style="padding-bottom: 5px;">
-                          <div class="user_content">
-                            <%= user_content(response[:text]) %>
-                          </div>
-                          <% if @quiz.graded? && !@quiz.anonymous_submissions? %>
-                            <div class="user_name" style="text-align: right; font-style: italic;">
-                              <%= context_user_name(@context, response[:user_id]) %>
-                            </div>
-                          <% end %>
+                    <div class="essay_answer" style="padding-bottom: 5px;">
+                      <div class="user_content">
+                        <%= user_content(response[:text]) %>
+                      </div>
+                      <% if @quiz.graded? && !@quiz.anonymous_submissions? %>
+                        <div class="user_name" style="text-align: right; font-style: italic;">
+                          <%= @users[response[:user_id]].short_name %>
                         </div>
-                        
+                      <% end %>
+                    </div>
                   <% end %>
                 </div>
               </td>
             </tr>
           </table>
+        <% elsif question[:question_type] == 'file_upload_question' %>
+                <div class="file_upload_answers">
+                  <%= render :partial => 'quizzes/download_file_upload_submissions' %>
+                </div>
         <% else %>
           <table class="results"><tr>
             <% question[:answers].each do |answer| %>

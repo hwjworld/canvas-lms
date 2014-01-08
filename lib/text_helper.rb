@@ -23,7 +23,7 @@ module TextHelper
 
   def strip_tags(text)
     text ||= ""
-    text.gsub(/<\/?[^>\n]*>/, "").gsub(/&#\d+;/) {|m| puts m; m[2..-1].to_i.chr rescue '' }.gsub(/&\w+;/, "")
+    text.gsub(/<\/?[^>\n]*>/, "").gsub(/&#\d+;/) {|m| puts m; m[2..-1].to_i.chr(text.encoding) rescue '' }.gsub(/&\w+;/, "")
   end
 
   # Converts a string of html to plain text, preserving as much of the
@@ -41,6 +41,46 @@ module TextHelper
     # append a line break to br and p tags, so they retain a line break after stripping tags
     doc.css('br, p').each { |node| node.after("\n\n") }
     doc.text.strip
+  end
+
+  # Converts a string of html to plain text using the Premailer gem.
+  def html_to_simple_text(html_str, opts={})
+    return "" if html_str.blank?
+    pm = Premailer.new(html_str, { :with_html_string => true, :input_encoding => 'UTF-8', :adapter => :nokogiri }.merge(opts))
+    pm.to_plain_text
+  end
+
+  # Public: Strip (most) HTML from an HTML string.
+  #
+  # html - The original HTML string to format.
+  # options - Formatting options.
+  #   - base_url: The protocol and domain to prepend to relative links (e.g. "https://instructure.com").
+  #
+  # Returns an HTML string.
+  def html_to_simple_html(html, options = {})
+    return '' if html.blank?
+    base_url = options.fetch(:base_url, '')
+    output   = Sanitize.clean(html, Sanitize::Config::BASIC)
+
+    append_base_url(output, base_url).html_safe
+  end
+
+  # Internal: Append given base URL to relative links in the source.
+  #
+  # subject - A string to HTML.
+  # base - A base protocol/domain string (e.g. "https://instructure.com").
+  #
+  # Returns a string.
+  def append_base_url(subject, base)
+    output = Nokogiri::HTML.fragment(subject)
+    tags   = output.search('*[@href]')
+
+    tags.each do |tag|
+      next if tag.attributes['href'].value.match(/^https?|mailto|ftp/)
+      tag.attributes['href'].value = "#{base}#{tag.attributes['href']}"
+    end
+
+    output.to_s
   end
 
   def quote_clump(quote_lines)
@@ -64,16 +104,24 @@ module TextHelper
         [a-z0-9.\-]+[.][a-z]{2,4}/               # looks like domain name followed by a slash
       )
 
-      [^\s()<>]+                                 # Run of non-space, non-()<>
-
-      [^\s`!()\[\]{};:'".,<>?«»“”‘’]             # End with: not a space or one of these punct chars
+      (?:
+        [^\s()<>]+                               # Run of non-space, non-()<>
+        |                                        # or
+        \([^\s()<>]*\)                           # balanced parens, single level
+      )+
+      (?:
+        \([^\s()<>]*\)                           # balanced parens, single level
+        |                                        # or
+        [^\s`!()\[\]{};:'".,<>?«»“”‘’]           # End with: not a space or one of these punct chars
+      )
     ) | (
       #{AUTO_LINKIFY_PLACEHOLDER}
     )
   }xi
 
   # Converts a plaintext message to html, with newlinification, quotification, and linkification
-  def format_message(message, url=nil, notification_id=nil)
+  def format_message(message, opts={ :url => nil, :notification_id => nil })
+    return '' unless message
     # insert placeholders for the links we're going to generate, before we go and escape all the html
     links = []
     placeholder_blocks = []
@@ -85,7 +133,7 @@ module TextHelper
         s = $1
         link = s
         link = "http://#{link}" if link[0,3] == 'www'
-        link = add_notification_to_link(link, notification_id) if notification_id
+        link = add_notification_to_link(link, opts[:notification_id]) if opts[:notification_id]
         link = URI.escape(link).gsub("'", "%27")
         links << link
         "<a href='#{ERB::Util.h(link)}'>#{ERB::Util.h(s)}</a>"
@@ -116,11 +164,11 @@ module TextHelper
     end
     processed_lines << quote_clump(quote_block) if !quote_block.empty?
     message = processed_lines.join("\n")
-    if url
-      url = add_notification_to_link(url, notification_id) if notification_id
-      links.unshift url
+    if opts[:url]
+      url = add_notification_to_link(opts[:url], opts[:notification_id]) if opts[:notification_id]
+      links.unshift opts[:url]
     end
-    links.unshift message
+    links.unshift message.html_safe
   end
 
   def add_notification_to_link(url, notification_id)

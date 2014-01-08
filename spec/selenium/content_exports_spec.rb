@@ -13,7 +13,6 @@ describe "content exports" do
       get "/courses/#{@course.id}/content_exports"
       yield if block_given?
       submit_form('#exporter_form')
-      Delayed::Job.last(:conditions => {:tag => 'ContentExport#export_course_without_send_later'})
       @export = keep_trying_until { ContentExport.last }
       @export.export_course_without_send_later
       new_download_link = keep_trying_until { f("#export_files a") }
@@ -45,7 +44,7 @@ describe "content exports" do
       @export.export_type.should == 'qti'
 
       file_handle = @export.attachment.open :need_local_file => true
-      zip_file = Zip::ZipFile.open(file_handle.path)
+      zip_file = Zip::File.open(file_handle.path)
       manifest_doc = Nokogiri::XML.parse(zip_file.read("imsmanifest.xml"))
 
       manifest_doc.at_css("resource[identifier=#{CC::CCHelper.create_key(q1)}]").should_not be_nil

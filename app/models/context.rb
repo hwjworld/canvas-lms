@@ -58,11 +58,7 @@ module Context
     WikiPage = ::WikiPage
 
     def self.get_for_string(str)
-      if RUBY_VERSION >= "1.9."
-        self.const_defined?(str, false) ? self.const_get(str, false) : nil
-      else
-        self.const_defined?(str) ? self.const_get(str) : nil
-      end
+      self.const_defined?(str, false) ? self.const_get(str, false) : nil
     end
   end
 
@@ -121,7 +117,7 @@ module Context
 
   def sorted_rubrics(user, context)
     associations = RubricAssociation.bookmarked.for_context_codes(context.asset_string).include_rubric
-    associations.to_a.once_per(&:rubric_id).select{|r| r.rubric }.sort_by{|r| r.rubric.title || "zzzz" }
+    Canvas::ICU.collate_by(associations.to_a.once_per(&:rubric_id).select{|r| r.rubric }) { |r| r.rubric.title || SortLast }
   end
 
   def rubric_contexts(user)
@@ -144,7 +140,7 @@ module Context
         :name => context_name
       }
     end
-    contexts.sort_by{|c| codes_order[c[:context_code]] || 999 }
+    contexts.sort_by{|c| codes_order[c[:context_code]] || SortLast }
   end
 
   def active_record_types
@@ -173,8 +169,24 @@ module Context
     res
   end
 
+  # [[context_type, context_id], ...] -> {[context_type, context_id] => name, ...}
+  def self.names_by_context_types_and_ids(context_types_and_ids)
+    ids_by_type = Hash.new([])
+    context_types_and_ids.each do |type, id|
+      next unless type && ContextTypes.const_defined?(type)
+      ids_by_type[type] += [id]
+    end
+
+    result = Hash.new
+    ids_by_type.each do |type, ids|
+      klass = ContextTypes.const_get(type)
+      klass.where(:id => ids).select([:id, :name]).map {|c| result[[type, c.id]] = c.name}
+    end
+    result
+  end
+
   def self.find_by_asset_string(string)
-    opts = string.split("_")
+    opts = string.split("_", -1)
     id = opts.pop
     if ContextTypes.const_defined?(opts.join('_').classify)
       type = ContextTypes.const_get(opts.join('_').classify)
@@ -212,5 +224,14 @@ module Context
 
   def is_a_context?
     true
+  end
+
+  # Public: Boolean flag re: whether a feature is enabled
+  # provides defaults for objects that do not include FeatureFlags
+  # (note: include Context _before_ FeatureFlags)
+  #
+  # Returns false
+  def feature_enabled?(feature)
+    false
   end
 end

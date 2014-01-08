@@ -18,8 +18,47 @@
 
 define [
   'Backbone'
-], ({Model}) ->
+  'compiled/collections/GroupUserCollection'
+], (Backbone, GroupUserCollection) ->
 
-  class Group extends Model
+  class Group extends Backbone.Model
     modelType: 'group'
     resourceName: 'groups'
+
+    initialize: (attrs, options) ->
+      super
+      @newAndEmpty = options?.newAndEmpty
+
+    users: ->
+      initialUsers = if @newAndEmpty then [] else null
+      @_users = new GroupUserCollection initialUsers,
+        group: this
+        category: @collection?.category
+      @_users.on 'fetched:last', => @set('members_count', @_users.length)
+      @users = -> @_users
+      @_users
+
+    usersCount: ->
+      @get('members_count')
+
+    sync: (method, model, options = {}) ->
+      options.url = @urlFor(method)
+      Backbone.sync method, model, options
+
+    urlFor: (method) ->
+      if method is 'create'
+        "/api/v1/group_categories/#{@get('group_category_id')}/groups"
+      else
+        "/api/v1/groups/#{@id}"
+
+    isFull: ->
+      limit = @collection?.category?.get 'group_limit'
+      limit and @get('members_count') >= limit
+
+    isLocked: ->
+      @collection?.category?.isLocked()
+
+    toJSON: ->
+      json = super
+      json.isFull = @isFull()
+      json

@@ -5,6 +5,7 @@ require [
   'compiled/views/DiscussionTopic/DiscussionFilterResultsView'
   'compiled/discussions/MarkAsReadWatcher'
   'jquery'
+  'underscore'
   'Backbone'
   'compiled/models/Entry'
   'compiled/models/Topic'
@@ -13,11 +14,11 @@ require [
   'compiled/views/DiscussionTopic/TopicView'
   'compiled/views/DiscussionTopic/EntriesView'
   'compiled/jquery/sticky'
-], (EntryView, DiscussionFilterState, DiscussionToolbarView, DiscussionFilterResultsView, MarkAsReadWatcher, $, Backbone, Entry, MaterializedDiscussionTopic, SideCommentDiscussionTopic, EntryCollection, TopicView, EntriesView) ->
+  'compiled/jquery/ModuleSequenceFooter'
+], (EntryView, DiscussionFilterState, DiscussionToolbarView, DiscussionFilterResultsView, MarkAsReadWatcher, $, _, Backbone, Entry, MaterializedDiscussionTopic, SideCommentDiscussionTopic, EntryCollection, TopicView, EntriesView) ->
 
-  perPage     = 10
-  descendants = 3
-  children    = 3
+  descendants = 5
+  children    = 10
 
   ##
   # create the objects ...
@@ -28,7 +29,7 @@ require [
                   else
                     new SideCommentDiscussionTopic root_url: ENV.DISCUSSION.ROOT_URL
 
-  entries       = new EntryCollection null, {perPage}
+  entries       = new EntryCollection null
 
   filterModel   = new DiscussionFilterState
 
@@ -63,7 +64,23 @@ require [
   ##
   # connect them ...
   data.on 'change', ->
-    entries.reset data.get 'entries'
+    entryData = data.get 'entries'
+    entries.options.per_page = entryData.length
+    entries.reset entryData
+
+  ##
+  # define function that syncs a discussion entry's
+  # read state back to the materialized view data.
+  updateMaterializedViewReadState = (id, read_state) ->
+    e = data.flattened[id]
+    e.read_state = read_state if e
+
+  ##
+  # propagate mark all read/unread changes to all views
+  setAllReadStateAllViews = (newReadState) ->
+    entries.setAllReadState(newReadState)
+    EntryView.setAllReadState(newReadState)
+    filterView.setAllReadState(newReadState)
 
   entriesView.on 'scrollAwayFromEntry', ->
     # prevent scroll to top for non-pushstate browsers when hash changes
@@ -72,6 +89,25 @@ require [
       trigger: false
       replace: true
     $container.scrollTo top
+
+  ##
+  # catch when an EntryView changes the read_state
+  # of a discussion entry and update the materialized view.
+  EntryView.on 'readStateChanged', (entry, view)->
+    updateMaterializedViewReadState(entry.get('id'), entry.get('read_state'))
+
+  ##
+  # catch when auto-mark-as-read watcher changes an entry
+  # and update the materialized view to match.
+  MarkAsReadWatcher.on 'markAsRead', (entry)->
+    updateMaterializedViewReadState(entry.get('id'), entry.get('read_state'))
+
+  ##
+  # detect when read_state changes on filtered model.
+  # sync the change to full view collections.
+  filterView.on 'readStateChanged', (id, read_state) ->
+    # update on materialized view
+    updateMaterializedViewReadState(id, read_state)
 
   filterView.on 'clickEntry', (entry) ->
     router.navigate "entry-#{entry.get 'id'}", yes
@@ -84,6 +120,14 @@ require [
     EntryView.collapseRootEntries()
     scrollToTop()
 
+  topicView.on 'markAllAsRead', ->
+    data.markAllAsRead()
+    setAllReadStateAllViews('read')
+
+  topicView.on 'markAllAsUnread', ->
+    data.markAllAsUnread()
+    setAllReadStateAllViews('unread')
+
   filterView.on 'render', ->
     scrollToTop()
 
@@ -95,6 +139,12 @@ require [
 
   ##
   # routes
+  router.route 'topic', 'topic', ->
+    $container.scrollTop $('#discussion_topic')
+    setTimeout ->
+      $('#discussion_topic .author').focus()
+      $container.one "scroll", -> router.navigate('')
+    , 10
   router.route 'entry-:id', 'id', entriesView.goToEntry
   router.route 'page-:page', 'page', (page) ->
     entriesView.render page
@@ -115,10 +165,19 @@ require [
     topicView.on 'addReply', (entry) ->
       entries.add entry
       router.navigate "entry-#{entry.get 'id'}", yes
-    MarkAsReadWatcher.init()
+    MarkAsReadWatcher.init() unless ENV.DISCUSSION.MANUAL_MARK_AS_READ
 
   topicView.render()
   toolbarView.render()
+
+  ##
+  # Add module sequence footer
+  if ENV.DISCUSSION.SEQUENCE?
+    $('#module_sequence_footer').moduleSequenceFooter(
+      assetType: 'Discussion'
+      assetID: ENV.DISCUSSION.SEQUENCE.ASSET_ID
+      courseID: ENV.DISCUSSION.SEQUENCE.COURSE_ID
+      )
 
   ##
   # Get the party started

@@ -53,14 +53,19 @@ class SectionsController < ApplicationController
   # @API List course sections
   # Returns the list of sections for this course.
   #
-  # @argument include[] [optional, "students"] Associations to include with the group.
-  # @argument include[] [optional, "avatar_url"] Include the avatar URLs for students returned.
+  # @argument include[] [Optional, String, "students"|"avatar_url"]
+  #   - "students": Associations to include with the group. Note: this is only
+  #     available if you have permission to view users or grades in the course
+  #   - "avatar_url": Include the avatar URLs for students returned.
   #
   # @returns [Section]
   def index
-    if authorized_action(@context, @current_user, [:read_roster, :view_all_grades, :manage_grades])
-      includes = Array(params[:include])
+    if authorized_action(@context, @current_user, [:read, :read_roster, :view_all_grades, :manage_grades])
+      if params[:include].present? && !is_authorized_action?(@context, @current_user, [:read_roster, :view_all_grades, :manage_grades])
+        params[:include] = nil
+      end
 
+      includes = Array(params[:include])
       result = @context.active_course_sections.map { |section| section_json(section, @current_user, session, includes) }
 
       render :json => result
@@ -70,10 +75,17 @@ class SectionsController < ApplicationController
   # @API Create course section
   # Creates a new section for this course.
   #
-  # @argument course_section[name] [String] The name of the section
-  # @argument course_section[sis_section_id] [String, optional] The sis ID of the section
-  # @argument course_section[start_at] [Datetime, optional] Section start date in ISO8601 format, e.g. 2011-01-01T01:00Z
-  # @argument course_section[end_at] [Datetime, optional] Section end date in ISO8601 format. e.g. 2011-01-01T01:00Z
+  # @argument course_section[name] [String]
+  #   The name of the section
+  #
+  # @argument course_section[sis_section_id] [Optional, String]
+  #   The sis ID of the section
+  #
+  # @argument course_section[start_at] [Optional, DateTime]
+  #   Section start date in ISO8601 format, e.g. 2011-01-01T01:00Z
+  #
+  # @argument course_section[end_at] [Optional, DateTime]
+  #   Section end date in ISO8601 format. e.g. 2011-01-01T01:00Z
   #
   # @returns Section
   def create
@@ -83,13 +95,14 @@ class SectionsController < ApplicationController
       @section.sis_source_id = sis_section_id if api_request? && sis_section_id.present? && @context.root_account.grants_right?(@current_user, session, :manage_sis)
       respond_to do |format|
         if @section.save
+          @context.touch
           flash[:notice] = t('section_created', "Section successfully created!")
           format.html { redirect_to course_settings_url(@context) }
-          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section.to_json) }
+          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section) }
         else
           flash[:error] = t('section_creation_failed', "Section creation failed")
           format.html { redirect_to course_settings_url(@context) }
-          format.json { render :json => @section.errors.to_json, :status => :bad_request }
+          format.json { render :json => @section.errors, :status => :bad_request }
         end
       end
     end
@@ -121,11 +134,11 @@ class SectionsController < ApplicationController
     res = {:allowed => !!allowed}
     if allowed
       @account = @new_course.account
-      res[:section] = @section
-      res[:course] = @new_course
-      res[:account] = @account
+      res[:section] = @section.as_json(include_root: false)
+      res[:course] = @new_course.as_json(include_root: false)
+      res[:account] = @account.as_json(include_root: false)
     end
-    render :json => res.to_json(:include_root => false)
+    render :json => res
   end
 
   # @API Cross-list a Section
@@ -144,7 +157,7 @@ class SectionsController < ApplicationController
       respond_to do |format|
         flash[:notice] = t('section_crosslisted', "Section successfully cross-listed!")
         format.html { redirect_to named_context_url(@new_course, :context_section_url, @section.id) }
-        format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section.to_json) }
+        format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section) }
       end
     end
   end
@@ -161,7 +174,7 @@ class SectionsController < ApplicationController
       respond_to do |format|
         flash[:notice] = t('section_decrosslisted', "Section successfully de-cross-listed!")
         format.html { redirect_to named_context_url(@new_course, :context_section_url, @section.id) }
-        format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section.to_json) }
+        format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section) }
       end
     end
   end
@@ -185,13 +198,14 @@ class SectionsController < ApplicationController
       end
       respond_to do |format|
         if @section.update_attributes(params[:course_section])
+          @context.touch
           flash[:notice] = t('section_updated', "Section successfully updated!")
           format.html { redirect_to course_section_url(@context, @section) }
-          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section.to_json) }
+          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section) }
         else
           flash[:error] = t('section_update_error', "Section update failed")
           format.html { redirect_to course_section_url(@context, @section) }
-          format.json { render :json => @section.errors.to_json, :status => :bad_request }
+          format.json { render :json => @section.errors, :status => :bad_request }
         end
       end
     end
@@ -206,10 +220,10 @@ class SectionsController < ApplicationController
       respond_to do |format|
         format.html do
           add_crumb(@section.name, named_context_url(@context, :context_section_url, @section))
-          @enrollments_count = @section.enrollments.not_fake.scoped(:conditions => { :workflow_state => 'active' }).count
-          @completed_enrollments_count = @section.enrollments.not_fake.scoped(:conditions => { :workflow_state => 'completed' }).count
-          @pending_enrollments_count = @section.enrollments.not_fake.scoped(:conditions => { :workflow_state => %w{invited pending} }).count
-          @student_enrollments_count = @section.enrollments.not_fake.scoped(:conditions => { :type => 'StudentEnrollment' }).count
+          @enrollments_count = @section.enrollments.not_fake.where(:workflow_state => 'active').count
+          @completed_enrollments_count = @section.enrollments.not_fake.where(:workflow_state => 'completed').count
+          @pending_enrollments_count = @section.enrollments.not_fake.where(:workflow_state => %w{invited pending}).count
+          @student_enrollments_count = @section.enrollments.not_fake.where(:type => 'StudentEnrollment').count
           js_env(
             :PERMISSIONS => {
               :manage_students => @context.grants_right?(@current_user, session, :manage_students) || @context.grants_right?(@current_user, session, :manage_admin_users),
@@ -230,13 +244,14 @@ class SectionsController < ApplicationController
       respond_to do |format|
         if @section.enrollments.not_fake.empty?
           @section.destroy
+          @context.touch
           flash[:notice] = t('section_deleted', "Course section successfully deleted!")
           format.html { redirect_to course_settings_url(@context) }
-          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section.to_json) }
+          format.json { render :json => (api_request? ? section_json(@section, @current_user, session, []) : @section) }
         else
           flash[:error] = t('section_delete_not_allowed', "You can't delete a section that has enrollments")
           format.html { redirect_to course_section_url(@context, @section) }
-          format.json { render :json => (api_request? ? { :message => "You can't delete a section that has enrollments" } : @section.to_json), :status => :bad_request }
+          format.json { render :json => (api_request? ? { :message => "You can't delete a section that has enrollments" } : @section), :status => :bad_request }
         end
       end
     end

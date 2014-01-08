@@ -45,7 +45,7 @@ describe "eportfolios" do
       eportfolio_model({:user => @user, :name => "student content"})
     end
 
-    it "Should start the download of ePortfolio contents" do
+    it "should start the download of ePortfolio contents" do
       get "/eportfolios/#{@eportfolio.id}"
       f(".download_eportfolio_link").click
       keep_trying_until { f("#export_progress").should be_displayed }
@@ -90,9 +90,9 @@ describe "eportfolios" do
       edit_link.click
       f('.add_content_link.add_rich_content_link').click
       wait_for_tiny(f('textarea.edit_section'))
-      f("img[alt='Embed Image']").click
-      f(".flickr_search_link").click
-      f("#instructure_image_search").should be_displayed
+      f('a.mce_instructure_image').click
+      f('a[href="#tabFlickr"]').click
+      f('form.FindFlickrImageView').should be_displayed
     end
 
 
@@ -131,7 +131,7 @@ describe "eportfolios" do
 
       it "should click on the How Do I..? button" do
         f(".wizard_popup_link").click
-        f("#wizard_box .wizard_options_list").should be_displayed
+        keep_trying_until { f("#wizard_box .wizard_options_list").should be_displayed }
       end
 
       it "should add rich text content" do
@@ -168,6 +168,7 @@ describe "eportfolios" do
         before(:each) do
           @html_content="<b>student</b>"
           f(".add_html_link").click
+          wait_for_ajaximations
           f("#edit_page_section_1").send_keys(@html_content)
         end
 
@@ -187,7 +188,7 @@ describe "eportfolios" do
           f(comment_public).click
           is_checked(comment_public).should be_true
           submit_form(".form_content")
-          wait_for_ajax_requests
+          wait_for_ajaximations
           f(".section_content b").text.should == "student"
           entry_verifier ({:section_type => "html", :content => @html_content})
           refresh_page
@@ -210,7 +211,7 @@ describe "eportfolios" do
           add_html
           f(".edit_content_link").click
           hover_and_click("#page_section_1 .delete_page_section_link")
-          driver.switch_to.alert.accept
+          try_to_close_modal
           wait_for_ajaximations
           submit_form(".form_content")
           wait_for_ajaximations
@@ -231,7 +232,8 @@ describe "eportfolios" do
 
       it "should add a course submission" do
         f(".add_submission_link").click
-        f(".submission_list").should include_text(@assignment.title)
+        wait_for_ajaximations
+        keep_trying_until { f(".submission_list").should include_text(@assignment.title) }
         f(".select_submission_button").click
         submit_form(".form_content")
       end
@@ -253,11 +255,17 @@ describe "eportfolios" do
         f('.wizard_details .details').text.should include_text text
       end
     end
+
+    it "should be viewable with a shared link" do
+      destroy_session @pseudonym, false
+      get "/eportfolios/#{@eportfolio.id}?verifier=#{@eportfolio.uuid}"
+      f('#content h2').text.should == "page"
+    end
   end
 end
 
 describe "eportfolios file upload" do
-  it_should_behave_like "forked server selenium tests"
+  it_should_behave_like "in-process server selenium tests"
 
   before (:each) do
     @password = "asdfasdf"
@@ -272,7 +280,7 @@ describe "eportfolios file upload" do
   end
 
   it "should upload a file" do
-    login_as(@student.email, @password)
+    create_session(@student.pseudonym, false)
     get "/eportfolios/#{@eportfolio.id}"
     filename, fullpath, data = get_file("testfile5.zip")
     expect_new_page_load { f(".icon-arrow-right").click }

@@ -8,19 +8,21 @@ check for the `Link` header.
 
 To retrieve additional pages, the returned `Link` headers should be used. These
 links should be treated as opaque. They will be absolute urls that include all
-parameters necessary to retreive the desired next, previous, first, or last
-page.  The one exception is that if an access_token parameter is sent for
+parameters necessary to retrieve the desired current, next, previous, first, or
+last page. The one exception is that if an access_token parameter is sent for
 authentication, it will not be included in the returned links, and must be
-re-appended.  
+re-appended.
 
 Pagination information is provided in the [Link header](http://www.w3.org/Protocols/9707-link-header.html):
 
-    Link: <https://<canvas>/api/v1/courses/:id/discussion_topics.json?page=2&per_page=10>; rel="next",
-          <https://<canvas>/api/v1/courses/:id/discussion_topics.json?page=1&per_page=10>; rel="first",
-          <https://<canvas>/api/v1/courses/:id/discussion_topics.json?page=5&per_page=10>; rel="last"
+    Link: <https://<canvas>/api/v1/courses/:id/discussion_topics.json?opaqueA>; rel="current",
+          <https://<canvas>/api/v1/courses/:id/discussion_topics.json?opaqueB>; rel="next",
+          <https://<canvas>/api/v1/courses/:id/discussion_topics.json?opaqueC>; rel="first",
+          <https://<canvas>/api/v1/courses/:id/discussion_topics.json?opaqueD>; rel="last"
 
 The possible `rel` values are:
 
+* current - link to the current page of results.
 * next - link to the next page of results.
 * prev - link to the previous page of results.
 * first - link to the first page of results.

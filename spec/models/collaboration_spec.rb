@@ -62,6 +62,7 @@ describe Collaboration do
     end
 
     it "should be able to get the title from the data" do
+      @collaboration.title = nil
       @collaboration.title.should eql('Biology 100 Collaboration')
     end
 
@@ -95,6 +96,15 @@ describe Collaboration do
       @collaboration.collaborators.map(&:user_id).uniq.count.should == 3
       @collaboration.collaborators.map(&:group_id).uniq.count.should == 1
       @collaboration.collaborators.reload.map(&:user_id).should_not include @users.last.id
+    end
+  end
+
+  describe EtherpadCollaboration do
+    it "should not re-initialize the url" do
+      collab = EtherpadCollaboration.new
+      collab.url = "http://example.com/legacy-uri"
+      collab.initialize_document
+      collab.url.should == "http://example.com/legacy-uri"
     end
   end
 end

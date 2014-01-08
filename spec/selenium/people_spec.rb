@@ -64,6 +64,8 @@ describe "people" do
 
       #add first student
       @student_1 = create_user('student@test.com')
+      Account.default.settings[:enable_manage_groups2] = false
+      Account.default.save!
 
       e1 = @course.enroll_student(@student_1)
       e1.workflow_state = 'active'
@@ -86,27 +88,15 @@ describe "people" do
     end
 
     it "should validate the main page" do
-      users = ff('.user_name')
-      users[0].text.should match @teacher.name
+      users = ff('.roster_user_name')
       users[1].text.should match @student_1.name
+      users[0].text.should match @teacher.name
     end
 
     it "should navigate to registered services on profile page" do
       driver.find_element(:link, 'View Registered Services').click
       driver.find_element(:link, 'Link web services to my account').click
       f('#unregistered_services').should be_displayed
-    end
-
-    it "should add a teacher, ta, student, and observer" do
-      expect_new_page_load { driver.find_element(:link, 'Manage Users').click }
-      wait_for_ajaximations
-      add_users_button = f('.add_users_link')
-      wait_for_ajaximations
-      add_users_button.click
-      add_user('Teachers', @test_teacher.name, 'ul.user_list.teacher_enrollments')
-      add_user("Students", @student_2.name, 'ul.user_list.student_enrollments')
-      add_user("TAs", @test_ta.name, 'ul.user_list.ta_enrollments')
-      add_user("Observers", @test_observer.name, 'ul.user_list.observer_enrollments')
     end
 
     it "should make a new set of student groups" do
@@ -188,7 +178,6 @@ describe "people" do
       group_count = 4
       expect_new_page_load { driver.find_element(:link, 'View User Groups').click }
       dialog = open_student_group_dialog
-      dialog.find_element(:css, '#category_split_group_count').send_keys(group_count)
       submit_form('#add_category_form')
       wait_for_ajaximations
       group_count.times do
@@ -240,7 +229,7 @@ describe "people" do
 
       get "/courses/#{@course.id}/users/#{@obs.id}"
       f('.more_user_information_link').click
-      wait_for_animations
+      wait_for_ajaximations
       enrollments = ff(".enrollment")
       enrollments.length.should == 2
 

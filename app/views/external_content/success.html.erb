@@ -16,6 +16,7 @@ require([
   }
   function dataReady(data) {
     if(parentWindow[callback] && parentWindow[callback].ready) {
+      parentWindow.$(parentWindow).trigger('externalContentReady', data);
       parentWindow[callback].ready(data);
       setTimeout(function() {
         $("#dialog_message").text("<%= t :popup_success, "Success! This popup should close on its own..." %>");
@@ -24,7 +25,7 @@ require([
       $("#dialog_message").text("<%= t :content_failure, "Content retrieval failed, please try again or notify your system administrator of the error." %>");
     }
   }
-  if(data.embed_type == 'oembed') {
+  if(data.return_type == 'oembed') {
     var url = $.replaceTags($.replaceTags($("#oembed_retrieve_url").attr('href'), 'endpoint', encodeURIComponent(data.endpoint)), 'url', encodeURIComponent(data.url));
     $.ajaxJSON(url, 'GET', {}, function(data) {
       dataReady(data);

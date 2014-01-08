@@ -80,51 +80,43 @@ describe ActiveRecord::Base do
       @e6 = c2.enroll_student(u3, :enrollment_state => 'active')
     end
 
-    it "should find each enrollment from course join" do
-      e = Course.active.scoped(:joins => :enrollments)
-      all_enrollments = []
-      e.useful_find_each(:batch_size => 2) do |e|
-        all_enrollments << e.id
-      end
-      all_enrollments.length.should == 6
-    end
-
-    it "should find in batches all enrollments from course join" do
-      e = Course.active.scoped(:select => "enrollments.id as eid", :joins => :enrollments)
-      all_enrollments = []
-      e.useful_find_in_batches(:batch_size => 2) do |batch|
-        batch.each do |e|
-          all_enrollments << e.eid
-        end
-      end
-      all_enrollments.length.should == 6
-    end
-
-    it "should find each enrollment from course using temp table" do
-      e = Course.active.scoped(:select => "enrollments.id AS e_id",
-                               :joins => :enrollments, :order => "e_id asc")
-      es = []
-      e.find_each_with_temp_table(:batch_size => 2) do |record|
-        es << record["e_id"]
-      end
-      es.length.should == 6
-      es.should == [@e1.id.to_s,@e2.id.to_s,@e3.id.to_s,@e4.id.to_s,@e5.id.to_s,@e6.id.to_s]
-
-    end
-
     it "should find all enrollments from course join in batches" do
-      e = Course.active.scoped(:select => "enrollments.id AS e_id",
-                               :joins => :enrollments, :order => "e_id asc")
+      e = Course.active.select("enrollments.id AS e_id").
+                        joins(:enrollments).order("e_id asc")
       batch_size = 2
       es = []
       e.find_in_batches_with_temp_table(:batch_size => batch_size) do |batch|
         batch.size.should == batch_size
         batch.each do |r|
-          es << r["e_id"]
+          es << r["e_id"].to_i
         end
       end
       es.length.should == 6
-      es.should == [@e1.id.to_s,@e2.id.to_s,@e3.id.to_s,@e4.id.to_s,@e5.id.to_s,@e6.id.to_s]
+      es.should == [@e1.id,@e2.id,@e3.id,@e4.id,@e5.id,@e6.id]
+    end
+
+    it "should honor includes when using a cursor" do
+      pending "needs PostgreSQL" unless Account.connection.adapter_name == 'PostgreSQL'
+      Account.default.courses.create!
+      Account.transaction do
+        Account.where(:id => Account.default).includes(:courses).find_each do |a|
+          a.courses.loaded?.should be_true
+        end
+      end
+    end
+
+    it "should not use a cursor when start is passed" do
+      pending "needs PostgreSQL" unless Account.connection.adapter_name == 'PostgreSQL'
+      Account.transaction do
+        Account.expects(:find_in_batches_with_cursor).never
+        Account.where(:id => Account.default).includes(:courses).find_each(start: 0) do |a|
+          a.courses.loaded?.should be_true
+        end
+      end
+    end
+
+    it "should raise an error when start is used with group" do
+      lambda { Account.group(:id).find_each(start: 0) }.should raise_error(ArgumentError)
     end
   end
 
@@ -274,12 +266,13 @@ describe ActiveRecord::Base do
       User.create
       User.cache do
         User.first
-        query_cache = User.connection.instance_variable_get(:@query_cache)
-        keys = query_cache.keys
-        keys.should be_present
+        User.connection.expects(:select).never
+        User.first
+        User.connection.unstub(:select)
 
         User.create!
-        (query_cache.keys & keys).should eql []
+        User.connection.expects(:select).once.returns([])
+        User.first
       end
     end
 
@@ -287,14 +280,15 @@ describe ActiveRecord::Base do
       u = User.create
       User.cache do
         User.first
-        query_cache = User.connection.instance_variable_get(:@query_cache)
-        keys = query_cache.keys
-        keys.should be_present
+        User.connection.expects(:select).never
+        User.first
+        User.connection.unstub(:select)
 
         u2 = User.new
         u2.id = u.id
         lambda{ u2.save! }.should raise_error(ActiveRecord::Base::UniqueConstraintViolation)
-        (query_cache.keys & keys).should eql []
+        User.connection.expects(:select).once.returns([])
+        User.first
       end
     end
   end
@@ -365,16 +359,16 @@ describe ActiveRecord::Base do
 
   context "bulk_insert" do
     it "should work" do
-      Course.connection.bulk_insert "courses", [
-        {:name => "foo"},
-        {:name => "bar"}
+      User.bulk_insert [
+        {:name => "foo", :workflow_state => "registered"},
+        {:name => "bar", :workflow_state => "registered"}
       ]
-      Course.all.map(&:name).sort.should eql ["bar", "foo"]
+      User.order(:name).pluck(:name).should eql ["bar", "foo"]
     end
 
     it "should not raise an error if there are no records" do
-      lambda { Course.connection.bulk_insert "courses", [] }.should_not raise_error
-      Course.all.size.should eql 0
+      lambda { Course.bulk_insert [] }.should_not raise_error
+      Course.count.should eql 0
     end
   end
 
@@ -434,6 +428,10 @@ describe ActiveRecord::Base do
   context "after_transaction_commit" do
     self.use_transactional_fixtures = false
 
+    before do
+      Rails.env.stubs(:test?).returns(false)
+    end
+
     it "should execute the callback immediately if not in a transaction" do
       a = 0
       User.connection.after_transaction_commit { a += 1 }
@@ -480,65 +478,18 @@ describe ActiveRecord::Base do
 
     it "should fail with improper nested hashes" do
       lambda {
-        User.find(:first, :conditions => { :name => { :users => { :id => @user.id }}})
+        User.where(:name => { :users => { :id => @user }}).first
       }.should raise_error(ActiveRecord::StatementInvalid)
     end
 
     it "should fail with dot in nested column name" do
       lambda {
-        User.find(:first, :conditions => { :name => { "users.id" => @user.id }})
+        User.where(:name => { "users.id" => @user }).first
       }.should raise_error(ActiveRecord::StatementInvalid)
     end
 
     it "should not fail with a dot in column name only" do
-      User.find(:first, :conditions => { 'users.id' => @user.id }).should_not be_nil
-    end
-  end
-
-  context "uber_scope" do
-    before do
-      course(:active_all => true)
-      @students = []
-      @enrollments = []
-      ['asdf', 'qwerty', 'lolwut'].each do |name|
-        student_in_course(:user_name => name)
-        @students << @student
-        @enrollments << @enrollment
-      end
-    end
-
-    it "should override the default select" do
-      # has_many :through scopes normally don't let you override the select, but
-      # uber_scope is strong. so strong
-      @course.students.uber_scope(:select => "users.id").each do |u|
-        u.attributes.keys.should eql ["id"]
-      end
-      @course.students.uber_scope(:select => "users.id").paginate(:page => nil).each do |u|
-        u.attributes.keys.should eql ["id"]
-      end
-    end
-
-    it "should override an intermediate select" do
-      StudentEnrollment.scoped(:select => "user_id").uber_scope(:select => "id").each do |e|
-        e.attributes.keys.should eql ["id"]
-      end
-      StudentEnrollment.scoped(:select => "user_id").uber_scope(:select => "id").paginate(:page => nil).each do |e|
-        e.attributes.keys.should eql ["id"]
-      end
-    end
-
-    it "should override the default order" do
-      @course.students.uber_scope(:order => "id desc").map(&:id).
-        should eql @students.map(&:id).reverse
-      @course.students.uber_scope(:order => "id desc").paginate(:page => nil).map(&:id).
-        should eql @students.map(&:id).reverse
-    end
-
-    it "should override an intermediate order" do
-      StudentEnrollment.uber_scope(:order => "id desc").map(&:id).
-        should eql @enrollments.map(&:id).reverse
-      StudentEnrollment.uber_scope(:order => "id desc").paginate(:page => nil).map(&:id).
-        should eql @enrollments.map(&:id).reverse
+      User.where('users.id' => @user).first.should_not be_nil
     end
   end
 
@@ -564,14 +515,14 @@ describe ActiveRecord::Base do
     end
 
     it "should do an update all with a join" do
-      Pseudonym.scoped(:joins => :user).active.update_all({:unique_id => 'pa3'}, {:users => {:name => 'a'}})
+      Pseudonym.joins(:user).active.where(:users => {:name => 'a'}).update_all(:unique_id => 'pa3')
       @p1.reload.unique_id.should == 'pa3'
       @p1_2.reload.unique_id.should == 'pa2'
       @p2.reload.unique_id.should == 'pb'
     end
 
     it "should do a delete all with a join" do
-      Pseudonym.scoped(:joins => :user).active.delete_all({:users => {:name => 'a'}})
+      Pseudonym.joins(:user).active.where(:users => {:name => 'a'}).delete_all
       lambda { @p1.reload }.should raise_error(ActiveRecord::RecordNotFound)
       @u1.reload.should_not be_deleted
       @p1_2.reload.unique_id.should == 'pa2'
@@ -579,18 +530,156 @@ describe ActiveRecord::Base do
     end
   end
 
-  describe "reorder" do
-    it "should discard previous order by options" do
-      @user1 = User.create!(:name => 'a')
-      @user2 = User.create!(:name => 'b')
-      scopeForward = User.order('name')
-      scopeForward.all.should == [@user1, @user2]
-      # AR method, doesn't work cause Rails just adds the order, instead of replacing
-      scopeBackward = scopeForward.order('name DESC')
-      scopeBackward.all.should == [@user1, @user2]
-      # our way, does work
-      scopeBackward = scopeForward.reorder('name DESC')
-      scopeBackward.all.should == [@user2, @user1]
+  describe "delete_all with_limit" do
+    it "should work" do
+      u = User.create!
+      p1 = u.pseudonyms.create!(unique_id: 'a', account: Account.default)
+      p2 = u.pseudonyms.create!(unique_id: 'b', account: Account.default)
+      u.pseudonyms.scoped.reorder("unique_id DESC").limit(1).delete_all
+      p1.reload
+      lambda { p2.reload }.should raise_error(ActiveRecord::RecordNotFound)
+    end
+  end
+
+  context "fake arel extensions" do
+    before do
+      @user = User.create!(:name => 'a')
+      @cc = @user.communication_channels.create!(:path => 'nobody@example.com')
+    end
+
+    describe "scoped" do
+      it "should work on models, associations, and scopes" do
+        # all we care is that we can call it with no arguments
+        User.scoped
+        User.scoped.scoped
+        @user.communication_channels.scoped
+      end
+    end
+
+    describe "except" do
+      it "should work on models, associations, and scopes" do
+        User.except(:select).scope(:find, :select).should be_nil
+        User.scoped.select(:id).except(:select).scope(:find, :select).should be_nil
+        @user.communication_channels.except(:select).scope(:find, :select).should be_nil
+      end
+
+      it "should work for :includes (Rails 3 name, Rails 2 name is :include)" do
+        User.includes(:communication_channels).except(:includes).scope(:find, :include).should be_nil
+      end
+    end
+
+    describe "reorder" do
+      it "should work on models, associations, and scopes" do
+        User.reorder(:id).scope(:find, :order).should == 'id'
+        User.scoped.reorder(:id).scope(:find, :order).should == 'id'
+        @user.communication_channels.reorder(:id).scope(:find, :order).should == 'id'
+      end
+
+      it "should discard previous order by options" do
+        User.order(:id).reorder(:name).scope(:find, :order).should == 'name'
+      end
+    end
+
+    describe "uniq" do
+      it "should work on models, associations, and scopes" do
+        User.uniq.scope(:find, :select).should match /DISTINCT/
+        User.scoped.uniq.scope(:find, :select).should match /DISTINCT/
+        @user.communication_channels.uniq.scope(:find, :select).should match /DISTINCT/
+      end
+
+      it "should un-unique" do
+        User.uniq.uniq(false).scope(:find, :select).should_not match /DISTINCT/
+      end
+
+      it "should un-unique custom DISTINCT" do
+        select = User.select('DISTINCT id').uniq(false).scope(:find, :select)
+        select.should_not be_nil
+        select.should_not match /DISTINCT/
+        select.should match /id/
+      end
+    end
+
+    describe "select" do
+      it "should work on models, associations, and scopes" do
+        User.select(:id).scope(:find, :select).should == 'id'
+        User.scoped.select(:id).scope(:find, :select).should == 'id'
+        @user.communication_channels.select(:id).scope(:find, :select).should == 'id'
+      end
+    end
+
+    describe "pluck" do
+      it "should work on models, associations, and scopes" do
+        User.pluck(:id).should == [@user.id]
+        User.scoped.pluck(:id).should == [@user.id]
+        @user.communication_channels.pluck(:id).should == [@cc.id]
+      end
+    end
+
+    describe "scope chaining" do
+      it "should merge select" do
+        User.select(:id).select(:name).scope(:find, :select).should == 'id, name'
+      end
+
+      it "should merge order" do
+        User.order(:id).order(:name).scope(:find, :order).should == 'id, name'
+      end
+
+      it "should merge group" do
+        User.group(:id).group(:name).scope(:find, :group).should == 'id, name'
+      end
+    end
+  end
+
+  describe "add_index" do
+    it "should raise an error on too long of name" do
+      name = 'some_really_long_name_' * 10
+      lambda { User.connection.add_index :users, [:id], name: name }.should raise_error
+    end
+  end
+
+  describe "nested conditions" do
+    it "should not barf if the condition has a question mark" do
+      User.joins(:enrollments).where(enrollments: { sis_source_id: 'a?c'}).first.should be_nil
+    end
+  end
+
+  describe ".nulls" do
+    before do
+      @u1 = User.create!
+      User.where(id: @u1).update_all(name: nil)
+      @u2 = User.create!(name: 'a')
+      @u3 = User.create!
+      User.where(id: @u3).update_all(name: nil)
+      @u4 = User.create!(name: 'b')
+
+      @us = [@u1, @u2, @u3, @u4]
+      # for sanity
+      User.where(id: @us, name: nil).order(:id).all.should == [@u1, @u3]
+    end
+
+    it "should sort nulls first" do
+      User.where(id: @us).order(User.nulls(:first, :name), :id).all.should == [@u1, @u3, @u2, @u4]
+    end
+
+    it "should sort nulls last" do
+      User.where(id: @us).order(User.nulls(:last, :name), :id).all.should == [@u2, @u4, @u1, @u3]
+    end
+
+    it "should sort nulls first, desc" do
+      User.where(id: @us).order(User.nulls(:first, :name, :desc), :id).all.should == [@u1, @u3, @u4, @u2]
+    end
+
+    it "should sort nulls last, desc" do
+      User.where(id: @us).order(User.nulls(:last, :name, :desc), :id).all.should == [@u4, @u2, @u1, @u3]
+    end
+  end
+
+  describe "marshalling" do
+    it "should not load associations when marshalling" do
+      a = Account.default
+      a.user_account_associations.loaded?.should be_false
+      Marshal.dump(a)
+      a.user_account_associations.loaded?.should be_false
     end
   end
 end

@@ -246,5 +246,60 @@ describe CourseSection, "moving to new course" do
     CourseAccountAssociation.find_all_by_course_id(course1.id).map(&:account_id).uniq.should == [account1.id]
     CourseAccountAssociation.find_all_by_course_id(course2.id).map(&:account_id).uniq.sort.should == [account1.id, account2.id].sort
   end
+  
+  describe 'deletable?' do
+    before do
+      course_with_teacher
+      @section = course.course_sections.create!
+    end
+    
+    it 'should be deletable if empty' do
+      @section.should be_deletable
+    end
+    
+    it 'should not be deletable if it has real enrollments' do
+      student_in_course :section => @section
+      @section.should_not be_deletable
+    end
+    
+    it 'should be deletable if it only has a student view enrollment' do
+      @course.student_view_student
+      @section.enrollments.map(&:type).should eql ['StudentViewEnrollment']
+      @section.should be_deletable
+    end
+  end
 
+  context 'permissions' do
+    context ':read and section_visibilities' do
+      before do
+        RoleOverride.create!({
+          :context => Account.default,
+          :permission => 'manage_students',
+          :enrollment_type => "TaEnrollment",
+          :enabled => false
+        })
+        course_with_ta(:active_all => true)
+        @other_section = @course.course_sections.create!(:name => "Other Section")
+      end
+
+      it "should work with section_limited true" do
+        @ta.enrollments.update_all(:limit_privileges_to_course_section => true)
+        @ta.reload
+
+        # make sure other ways to get :read are false
+        @other_section.cached_context_grants_right?(@ta, nil, :manage_sections).should be_false
+        @other_section.cached_context_grants_right?(@ta, nil, :manage_students).should be_false
+
+        @other_section.grants_right?(@ta, :read).should be_false
+      end
+
+      it "should work with section_limited false" do
+        # make sure other ways to get :read are false
+        @other_section.cached_context_grants_right?(@ta, nil, :manage_sections).should be_false
+        @other_section.cached_context_grants_right?(@ta, nil, :manage_students).should be_false
+
+        @other_section.grants_right?(@ta, :read).should be_true
+      end
+    end
+  end
 end

@@ -32,8 +32,7 @@ describe GradebookUploadsController do
       file = Tempfile.new("csv.csv")
       file.puts("not a good csv")
       file.close
-      require 'action_controller'
-      require 'action_controller/test_process.rb'
+      require 'action_controller_test_process'
       data = ActionController::TestUploadedFile.new(file.path, 'text/csv', true)
       post 'create', :course_id => @course.id, :gradebook_upload => {:uploaded_data => data}
       response.should be_redirect
@@ -68,7 +67,7 @@ describe GradebookUploadsController do
       @assignment.submissions.first.grade.should == '10'
       @assignment2.submissions.first.grade.should == '8'
       
-      uploaded_csv = FasterCSV.generate do |csv|
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Some Assignment", "Some Assignment 2"]
         csv << ["    Points Possible", "", "","", ""]
         csv << ["" , @student.id.to_s, "", "", "", 5, 7]
@@ -96,7 +95,7 @@ describe GradebookUploadsController do
     it "should create new assignments" do
       course_with_graded_student
       
-      uploaded_csv = FasterCSV.generate do |csv|
+      uploaded_csv = CSV.generate do |csv|
         csv << ["Student", "ID", "SIS User ID", "SIS Login ID", "Section", "Some Assignment", "Some Assignment 2", "Third Assignment"]
         csv << ["    Points Possible", "", "","", "", "", "", "15"]
         csv << ["" , @student.id.to_s, "", "", "", 5, 7, 10]
@@ -136,8 +135,7 @@ describe GradebookUploadsController do
     file = Tempfile.new("csv.csv")
     file.puts(@course.gradebook_to_csv(:include_sis_id => include_sis_id))
     file.close
-    require 'action_controller'
-    require 'action_controller/test_process.rb'
+    require 'action_controller_test_process'
     data = ActionController::TestUploadedFile.new(file.path, 'text/csv', true)
     post 'create', :course_id => @course.id, :gradebook_upload => {:uploaded_data => data}
     response.should be_success

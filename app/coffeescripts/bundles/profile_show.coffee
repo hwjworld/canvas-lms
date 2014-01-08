@@ -1,11 +1,31 @@
+#
+# Copyright (C) 2013 Instructure, Inc.
+#
+# This file is part of Canvas.
+#
+# Canvas is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, version 3 of the License.
+#
+# Canvas is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Affero General Public License along
+# with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+
 require [
+  'i18n!user_profile',
   'Backbone'
   'jquery'
   'str/htmlEscape'
+  'compiled/util/AvatarWidget'
   'compiled/tinymce'
-  'compiled/jquery/validate'
+  'jquery.instructure_forms'
   'tinymce.editor_box'
-], ({View}, $, htmlEscape) ->
+], (I18n, {View}, $, htmlEscape, AvatarWidget) ->
 
   class ProfileShow extends View
 
@@ -14,6 +34,12 @@ require [
     events:
       'click [data-event]': 'handleDeclarativeClick'
       'submit #edit_profile_form': 'validateForm'
+
+    attemptedDependencyLoads: 0
+
+    initialize: ->
+      super
+      new AvatarWidget('.profile-link')
 
     handleDeclarativeClick: (event) ->
       event.preventDefault()
@@ -71,7 +97,13 @@ require [
       $el.parents('tr').remove()
 
     validateForm: (event) ->
-      unless $('#edit_profile_form').validate()
+      validations =
+        required: ['user[short_name]']
+        property_validations:
+          'user_profile[title]': (value) ->
+            if value && value.length > 255
+              return I18n.t("profile_title_too_long", "Title is too long")
+      if !$(event.target).validateForm(validations)
         event.preventDefault()
 
   new ProfileShow ENV.PROFILE

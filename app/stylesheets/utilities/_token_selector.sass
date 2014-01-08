@@ -24,12 +24,15 @@
     padding: 0
     margin: 0 0 10px
     overflow: auto
-    li
+    li, li.active.no-results
+      background: transparent
       position: relative
       overflow: hidden
       border-top: 1px solid #fff
       border-bottom: 1px solid #d4d5d7
       padding: 5px
+    li.active.no-results
+      border-bottom: none
     li.first
       border-top: none
     li.last
@@ -44,10 +47,11 @@
       line-height: 32px
       text-align: center
       border-bottom: none
-    li.active
+    li.active, li:focus
       border-top-color: #d7eefb
       border-bottom-color: #297fd1
       background: #2da5f0 url(/images/messages/finder-active.png) repeat-x 0 0
+      outline: none
     li.active.expanded
       background: #f4fbff
       border-top-color: #fff

@@ -32,7 +32,7 @@ define [
       @lock_explanation = @assignment.lock_explanation
       @description = @assignment.description
       @start = @parseStartDate()
-      @originalStartDate = new Date(@start) if @start
+      @end = null # in case it got set by midnight fudging
 
     copyDataFromOverride: (override) ->
       @override = override
@@ -42,19 +42,19 @@ define [
     fullDetailsURL: () ->
       @assignment.html_url
 
-    startDate: () -> @originalStartDate
-
     parseStartDate: () ->
       if @assignment.due_at then $.parseFromISO(@assignment.due_at, 'due_date').time else null
 
     displayTimeString: () ->
-      if !@start
+      unless date = @originalStart
         return "No Date" # TODO: i18n
 
-      date = @start
       # TODO: i18n
       time_string = "#{$.dateString(date)} at #{$.timeString(date)}"
       "Due: <time datetime='#{date.toISOString()}'>#{time_string}</time>"
+
+    readableType: () ->
+      @readableTypes[@assignmentType()]
 
     updateAssignmentTitle: (title) ->
       @assignment.title = title

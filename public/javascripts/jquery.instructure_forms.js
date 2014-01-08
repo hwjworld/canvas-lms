@@ -65,6 +65,7 @@ define([
   //      encompassing the request(s) triggered by the submit action and 2. the
   //      formData being posted
   $.fn.formSubmit = function(options) {
+    $(this).markRequired(options);
     this.submit(function(event) {
       var $form = $(this); //this is to handle if bind to a template element, then it gets cloned the original this would not be the same as the this inside of here.
        // disableWhileLoading might need to wrap this, so we don't want to modify the original
@@ -107,6 +108,12 @@ define([
       if (options.disableWhileLoading) {
         var oldOnSubmit = onSubmit;
         onSubmit = function(loadingPromise) {
+          if (options.disableWhileLoading === 'spin_on_success') {
+            // turn it into a false promise, i.e. never resolve
+            var origPromise = loadingPromise;
+            loadingPromise = $.Deferred();
+            origPromise.fail(function(){ loadingPromise.reject(); });
+          }
           $form.disableWhileLoading(loadingPromise);
           if (oldOnSubmit) oldOnSubmit.apply(this, arguments);
         }
@@ -163,6 +170,8 @@ define([
           needValidForm = false;
         }
         if ($formObj.parents("html").get(0) == $("html").get(0) && options.formErrors !== false) {
+          if ($.isFunction(options.errorFormatter))
+            data = options.errorFormatter(data.errors || data);
           $formObj.formErrors(data, options);
         } else if (needValidForm) {
           $.ajaxJSON.unhandledXHRs.push(request);
@@ -180,6 +189,7 @@ define([
           intent: options.intent,
           folder_id: $.isFunction(options.folder_id) ? (options.folder_id.call($form)) : options.folder_id,
           file_elements: $form.find("input[type='file']:visible"),
+          files: $.isFunction(options.files) ? (options.files.call($form)) : options.files,
           url: (options.upload_only ? null : action),
           method: options.method,
           uploadDataUrl: options.uploadDataUrl,
@@ -216,7 +226,6 @@ define([
             priorTarget   = $form.attr('target'),
             priorEnctype  = $form.attr('ENCTYPE'),
             request       = new FakeXHR();
-
         $form.attr({
           'method' : method,
           'action' : action,
@@ -224,11 +233,12 @@ define([
           'encoding' : 'multipart/form-data',
           'target' : "frame_" + id
         });
+        // TODO: remove me once we stop proxying file uploads and/or
+        // explicitly calling $.ajaxJSONFiles
         if (options.onlyGivenParameters) {
           $form.find("input[name='_method']").remove();
           $form.find("input[name='authenticity_token']").remove();
         }
-
         $.ajaxJSON.storeRequest(request, action, method, formData);
 
         $frame.bind('form_response_loaded', function() {
@@ -260,14 +270,7 @@ define([
     return this;
   };
 
-  var assert_option = function(data, arg) {
-    if(!data[arg]) {
-      throw arg + " option is required";
-    }
-  };
-
   $.ajaxJSONPreparedFiles = function(options) {
-    assert_option(options, 'context_code');
     var list = [];
     var $this = this;
     var pre_list = options.files || options.file_elements || [];
@@ -304,14 +307,13 @@ define([
           }, function(data) {
             $(file).attr('name', old_name);
             (options.upload_error || options.error).call($this, data);
-          }, {onlyGivenParameters: data.remote_url});
+          }, {onlyGivenParameters: true });
         } else {
           (options.upload_error || options.error).call($this, data);
         }
-        } catch(e) {
-          var ex = e;
-        }
-      }, function() { 
+        } finally {}
+
+      }, function() {
         return (options.upload_error || options.error).apply(this, arguments);
       });
     };
@@ -319,6 +321,8 @@ define([
       var item = list.shift();
       if(item) {
         uploadFile.call($this, $.extend({
+          'name': item.name,
+          'on_duplicate': 'rename',
           'attachment[folder_id]': options.folder_id,
           'attachment[intent]': options.intent,
           'attachment[asset_string]': options.asset_string,
@@ -336,7 +340,8 @@ define([
     var $newForm = $(document.createElement("form"));
     $newForm.attr('action', url).attr('method', submit_type);
     if(!formData.authenticity_token) {
-      formData.authenticity_token = $("#ajax_authenticity_token").text();
+      // TODO: remove me once we stop proxying file uploads
+      formData.authenticity_token = ENV.AUTHENTICITY_TOKEN;
     }
     var fileNames = {};
     files.each(function() {
@@ -377,7 +382,8 @@ define([
   }
   $.ajaxFileUpload = function(options) {
     if(!options.data.authenticity_token) {
-      options.data.authenticity_token = ENV.AUTHENTICITY_TOKEN
+      // TODO: remove me once we stop proxying file uploads
+      options.data.authenticity_token = ENV.AUTHENTICITY_TOKEN;
     }
     $.toMultipartForm(options.data, function(params) {
       $.sendFormAsBinary({
@@ -440,30 +446,30 @@ define([
           options.error.call(this, "aborted by the user", xhr, event);
         }
       }, false);
-      xhr.onreadystatechange = function(event) {
-        if(xhr.readyState == 4) {
-          var json = null;
-          try {
-            json = $.parseJSON(xhr.responseText);
-          } catch(e) { }
-          if($.httpSuccess(xhr)) {
-            if(json && !json.errors) {
-              if(options.success && $.isFunction(options.success)) {
-                options.success.call(this, json, xhr, event);
-              }
-            } else {
-              if(options.error && $.isFunction(options.error)) {
-                options.error.call(this, json || xhr.responseText, xhr, event);
-              }
+    }
+    xhr.onreadystatechange = function(event) {
+      if(xhr.readyState == 4) {
+        var json = null;
+        try {
+          json = $.parseJSON(xhr.responseText);
+        } catch(e) { }
+        if($.httpSuccess(xhr)) {
+          if(json && !json.errors) {
+            if(options.success && $.isFunction(options.success)) {
+              options.success.call(this, json, xhr, event);
             }
           } else {
             if(options.error && $.isFunction(options.error)) {
               options.error.call(this, json || xhr.responseText, xhr, event);
             }
           }
+        } else {
+          if(options.error && $.isFunction(options.error)) {
+            options.error.call(this, json || xhr.responseText, xhr, event);
+          }
         }
-      };
-    }
+      }
+    };
     xhr.open(method, url);
     xhr.setRequestHeader('Accept', 'application/json, text/javascript, */*');
     xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
@@ -673,9 +679,7 @@ define([
           inputType = $input.attr('type');
       if ((inputType == "radio" || inputType == 'checkbox') && !$input.attr('checked')) return;
       var val = $input.val();
-      if ($input.hasClass('suggestion_title') && $input.attr('title') == val) {
-        val = "";
-      } else if ($input.hasClass('datetime_field_enabled')) {
+      if ($input.hasClass('datetime_field_enabled')) {
         var suggestText = $input.parent().children(".datetime_suggest").text();
         if (suggestText) val = suggestText;
       }
@@ -831,7 +835,8 @@ define([
           if (!errors[name]) {
             errors[name] = [];
           }
-          errors[name].push(I18n.t('errors.field_is_required', "This field is required"));
+          var fieldPrompt = $form.getFieldLabelString(name);
+          errors[name].push(I18n.t('errors.required', "Required field")+(fieldPrompt ? ': '+fieldPrompt : ''));
         }
       });
     }
@@ -948,10 +953,12 @@ define([
     });
     var hasErrors = false;
     var highestTop = 0;
+    var lastField = null;
     var currentTop = $(document).scrollTop();
     var errorDetails = {};
+    $('#aria_alerts').empty();
     $.each(errors, function(name, msg) {
-      var $obj = $form.find(":input[name='" + name + "'],:input[name*='[" + name + "]']").filter(":first");
+      var $obj = $form.find(":input[name='" + name + "'],:input[name*='[" + name + "]']").filter(":visible").first();
       if(!$obj || $obj.length === 0 || name == "general") {
         $obj = $form;
       }
@@ -964,7 +971,9 @@ define([
       if (offset.top > highestTop) {
         highestTop = offset.top;
       }
+      lastField = $obj;
     });
+    if (lastField) {lastField.focus();}
     for(var idx in elementErrors) {
       var $obj = elementErrors[idx][0];
       var msg = elementErrors[idx][1];
@@ -997,8 +1006,20 @@ define([
                           "<img src='/images/error_bottom.png' class='error_bottom'/>" +
                         "</div>").appendTo("body");
       }
+      // it'd be more semantic to make the error_box have a role=alert but that doesn't work everywhere
+      // http://blog.paciellogroup.com/2012/06/html5-accessibility-chops-aria-rolealert-browser-support/
+      // we also have to add aria_alerts to the layout itself, since creating
+      // it dynamically means VoiceOver won't read it
+
+      // if there is no container for ARIA alerts, add the role to the template, so it at least works for some users.
+      if ($('#aria_alerts').length === 0) {
+        $template.find(".error_text").attr('role', 'alert');
+      } else {
+        $('#aria_alerts').append($('<div/>').html(message));
+      }
       var $box = $template.clone(true).attr('id', '').css('zIndex', $obj.zIndex() + 1).appendTo("body");
       $box.find(".error_text").html(message);
+
       var offset = $obj.offset();
       var height = $box.outerHeight();
       var objLeftIndent = Math.round($obj.outerWidth() / 5);
@@ -1010,20 +1031,25 @@ define([
         left: offset.left + objLeftIndent
       }).fadeIn('fast');
 
+      var cleanup = function() {
+        $box.remove();
+        $obj.removeData('associated_error_box');
+        $obj.removeData('associated_error_object');
+      };
+
+      var fade = function() {
+        $box.stop(true,true).fadeOut('slow', cleanup);
+      };
+
       $obj.data({
         associated_error_box :$box,
         associated_error_object: $obj
-      }).focus(function() {
-        $box.fadeOut('slow', function() {
-          $box.remove();
-        });
-      });
+      }).click(fade).keypress(fade);
 
       $box.click(function() {
-        $(this).fadeOut('fast', function() {
-          $(this).remove();
-        });
+        $(this).fadeOut('fast', cleanup);
       });
+
       $.fn.errorBox.errorBoxes.push($obj);
       if(!$.fn.errorBox.isBeingAdjusted) {
         $.moveErrorBoxes();
@@ -1086,56 +1112,33 @@ define([
     return this;
   };
 
-  // Shows a gray-colored text suggestion for the form object when it is
-  // blank, i.e. a date field would show DD-MM-YYYY until the user clicks on it.
-  // I may phase this out or rewrite it, I'm undecided.  It's not
-  // being used very much yet.
-  $.fn.formSuggestion = function() {
-    return this.each(function() {
-      var $this = $(this);
-      $this.focus(function(event) {
-        var $this = $(this),
-            title = $this.attr('title');
-        $this.addClass('suggestionFocus');
-        if(!title || title === "") { return; }
-        if($this.val() == title) {
-          $this.select();
-        }
-        $this.removeClass("form_text_hint");
-      }).blur(function(event) {
-        var $this = $(this),
-            title = $this.attr('title');
-        $this.removeClass('suggestionFocus');
-        if(!title || title === "") { return; }
-        if($this.val() === "") {
-          $this.val(title);
-        }
-        if($this.val() == title) {
-          $this.addClass("form_text_hint");
-        }
-      })
-      // Workaround a strage bug where the input would be selected then immediately unselected
-      // every other time you clicked on the input with its defaultValue being shown
-      .mouseup(false)
-      .change(function(event) {
-        var $this = $(this),
-            title;
-        if ( !$this.hasClass('suggestionFocus') && ( title = $(this).attr('title') ) ) {
-          $this.removeClass('suggestionFocus');
-          if ($this.val() === "") {
-            $this.val(title);
-          }
-          $this.toggleClass("form_text_hint", $this.val() == title);
-        }
-      }).addClass('suggestion_title');
-
-      var title = $this.attr('title'),
-          val   = $this.val();
-      if ( title && ( val === "" || val == title) ) {
-        $this.addClass("form_text_hint").val(title);
-      }
+  $.fn.markRequired = function(options) {
+    if (!options.required) {return;}
+    var required = options.required;
+    if (options.object_name) {
+      required = $._addObjectName(required, options.object_name);
+    }
+    $form = $(this);
+    $.each(required, function(i, name) {
+      var field = $form.find('[name="'+name+'"]');
+      if (!field.length) {return;}
+      field.attr({'aria-required': 'true'});
+      // TODO: enable this, maybe when Safari supports it
+      // field.attr({required: true});
+      field.each(function() {
+        if (!this.id) {return;}
+        label = $('label[for="'+this.id+'"]');
+        if (!label.length) {return;}
+        label.append($('<span />').text('*').attr('title', I18n.t('errors.field_is_required', "This field is required")));
+      });
     });
   };
-  $.fn.formSuggestion.suggestions = [];
 
+  $.fn.getFieldLabelString = function(name) {
+    var field = $(this).find('[name="'+name+'"]');
+    if (!field.length || !field[0].id) {return;}
+    label = $('label[for="'+field[0].id+'"]');
+    if (!label.length) {return;}
+    return label[0].firstChild.textContent;
+  };
 });

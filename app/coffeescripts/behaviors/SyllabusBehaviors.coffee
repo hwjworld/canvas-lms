@@ -114,6 +114,17 @@ define [
     todayString = $.datepicker.formatDate 'yy_mm_dd', new Date
     highlightDate todayString
 
+  selectRow = ($row, e) ->
+    if $row.length > 0
+      $('tr.selected').removeClass('selected')
+      $row.addClass('selected')
+      $('html, body').scrollTo $row
+      $row.find('a').focus() if e.screenX == 0
+
+  selectDate = (date) ->
+    $('.mini_month .day.selected').removeClass('selected')
+    $('.mini_month').find("#mini_day_#{date}").addClass('selected')
+
   # Binds to mini calendar dom events
   bindToMiniCalendar = ->
     $mini_month = $('.mini_month')
@@ -132,10 +143,10 @@ define [
 
       calendarMonths.changeMonth $mini_month, "#{month}/#{day}/#{year}"
       highlightDaysWithEvents()
+      selectDate(date)
 
       $(".events_#{date}").ifExists ($events) ->
-        $('html, body').scrollTo $events
-        highlightDate date
+        selectRow($events, ev)
 
     $mini_month.on 'mouseover mouseout', '.mini_calendar_day', (ev) ->
       date = this.id.slice(9) unless ev.type == 'mouseout'
@@ -147,14 +158,15 @@ define [
       $lastBefore = undefined
       $('tr.date').each ->
         dateString = $(this).find('.day_date').attr('data-date')
-        return false if dateString > todayString
+        return false if !dateString || dateString > todayString
         $lastBefore = $(this)
 
       calendarMonths.changeMonth $mini_month, $.datepicker.formatDate 'mm/dd/yy', new Date
       highlightDaysWithEvents()
 
-      $('html, body').scrollTo $lastBefore or $('tr.date:first')
-      highlightDate todayString
+      $lastBefore ||= $('tr.date:first')
+      selectDate(todayString)
+      selectRow($lastBefore, ev)
 
   # Binds to edit syllabus dom events
   bindToEditSyllabus = ->
@@ -163,13 +175,15 @@ define [
     $course_syllabus = $('#course_syllabus')
     $course_syllabus_details = $('#course_syllabus_details')
 
+    $course_syllabus.data('syllabus_body', ENV.SYLLABUS_BODY)
+
     wikiSidebar and wikiSidebar.init()
     $edit_course_syllabus_form.on 'edit', ->
       $edit_course_syllabus_form.show()
       $course_syllabus.hide()
       $course_syllabus_details.hide()
       $course_syllabus_body.editorBox()
-      $course_syllabus_body.editorBox 'set_code', $course_syllabus.html()
+      $course_syllabus_body.editorBox 'set_code', $course_syllabus.data('syllabus_body')
       if wikiSidebar
         wikiSidebar.attachToEditor $course_syllabus_body
         wikiSidebar.show()
@@ -210,6 +224,7 @@ define [
 
       success: (data) ->
         $course_syllabus.loadingImage('remove').html data.course.syllabus_body
+        $course_syllabus.data('syllabus_body', data.course.syllabus_body)
         $course_syllabus_details.hide()
 
       error: (data) ->

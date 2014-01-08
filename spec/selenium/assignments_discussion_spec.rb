@@ -1,7 +1,8 @@
 require File.expand_path(File.dirname(__FILE__) + '/helpers/assignments_common')
 
 describe "discussion assignments" do
-  it_should_behave_like "assignments selenium tests"
+  it_should_behave_like "in-process server selenium tests"
+
 
   before (:each) do
     course_with_teacher_logged_in
@@ -12,7 +13,8 @@ describe "discussion assignments" do
       get "/courses/#{@course.id}/assignments"
       build_assignment_with_type("Discussion", :submit => true)
       expect_new_page_load { f("#left-side .discussions").click }
-      ff(".discussionTopicIndexList .discussion-topic").should_not be_empty
+      wait_for_ajaximations
+      ffj('.discussion-list li.discussion:visible').should_not be_empty
     end
 
     it "should redirect to the discussion topic" do

@@ -23,6 +23,24 @@ describe QuizzesHelper do
   include ApplicationHelper
   include QuizzesHelper
 
+  describe "#attachment_id_for" do
+
+    it "returns the attachment id if attachment exists" do
+      question = {:id => 1}
+      @attachments = { 1 => {:id => "11"} }
+      @stored_params = { "question_1" => ["1"]}
+      attachment_id_for(question).should == "11"
+    end
+
+    it "returns empty string when no attachments stored" do
+
+      question = {:id => 1}
+      @stored_params = {}
+      @attachments = {}
+      attachment_id_for(question).should == nil
+    end
+  end
+
   context 'render_score' do
     it 'should render nil scores' do
       render_score(nil).should == '_'
@@ -109,25 +127,169 @@ describe QuizzesHelper do
     end
   end
 
-  context 'duration_in_minutes' do
-    it 'should work in russian when count == 1' do
-      I18n.locale = "ru"
-      duration_in_minutes(60.6).should == "1 минута"
+  context 'fill_in_multiple_blanks_question' do
+    before(:each) do
+      @question_text = %q|<input name="question_1" 'value={{question_1}}' />|
+      @answer_list = [] 
+      @answers = []
+
+      def user_content(stuff); stuff; end # mock #user_content
+    end
+    it 'should sanitize user input' do
+      malicious_answer_list =  [%q|'><script>alert('ha!')</script><img|]
+
+      html = fill_in_multiple_blanks_question(
+        :question => {:question_text => @question_text},
+        :answer_list => malicious_answer_list,
+        :answers => @answers
+      )
+
+      html.should == %q|<input name="question_1" 'value=&#39;&gt;&lt;script&gt;alert(&#39;ha!&#39;)&lt;/script&gt;&lt;img' readonly="readonly" aria-label='Fill in the blank, read surrounding text' />|
+    end
+    
+    it 'should add an appropriate label' do
+      html = fill_in_multiple_blanks_question(
+        :question => {:question_text => @question_text},
+        :answer_list => @answer_list,
+        :answers => @answers
+      ) 
+
+      html.should =~ /aria\-label/
+      html.should =~ /Fill in the blank/
     end
   end
 
-  context 'fill_in_multiple_blanks_question' do
-    it 'should sanitize user input' do
-      def user_content(stuff); stuff; end
+  describe "#quiz_edit_text" do
 
-      question_text = %q|<input name="question_1" 'value={{question_1}}' />|
-      html = fill_in_multiple_blanks_question(
-        :question => {:question_text => question_text},
-        :answer_list => [%q|'><script>alert('ha!')</script><img|],
-        :answers => []
-      )
+    it "returns correct string for survey" do
+      quiz = stub(:survey? => true)
+      quiz_edit_text(quiz).should == "Edit Survey"
+    end
 
-      html.should == %q|<input name="question_1" 'value=&#39;&gt;&lt;script&gt;alert(&#39;ha!&#39;)&lt;/script&gt;&lt;img' readonly="readonly" />|
+    it "returns correct string for quiz" do
+      quiz = stub(:survey? => false)
+      quiz_edit_text(quiz).should == "Edit Quiz"
+    end
+  end
+
+  describe "#quiz_delete_text" do
+
+    it "returns correct string for survey" do
+      quiz = stub(:survey? => true)
+      quiz_delete_text(quiz).should == "Delete Survey"
+    end
+
+    it "returns correct string for quiz" do
+      quiz = stub(:survey? => false)
+      quiz_delete_text(quiz).should == "Delete Quiz"
+    end
+  end
+
+  describe "#score_affected_by_regrade" do
+    it "returns true if kept score differs from score before regrade" do
+      submission = stub(:score_before_regrade => 5, :kept_score => 10, :score => 5)
+      score_affected_by_regrade?(submission).should be_true
+    end
+
+    it "returns false if kept score equals score before regrade" do
+      submission = stub(:score_before_regrade => 5, :kept_score => 5, :score => 0)
+      score_affected_by_regrade?(submission).should be_false
+    end
+  end
+
+  describe "#answer_title" do
+    it "builds title if answer is selected" do
+      title = answer_title(true, false, false)
+      title.should == "title=\"You selected this answer.\""
+    end
+
+    it "builds title if answer is correct" do
+      title = answer_title(false, true, true)
+      title.should == "title=\"This was the correct answer.\""
+    end
+
+    it "returns nil if not selected or correct" do
+      title = answer_title(false, false, false)
+      title.should be_nil
+    end
+  end
+
+  describe '#render_correct_answer_protection' do
+    it 'should provide a useful message when "no"' do
+      quiz = stub({
+        show_correct_answers: false,
+        show_correct_answers_at: nil,
+        hide_correct_answers_at: nil
+      })
+
+      message = render_correct_answer_protection(quiz)
+      message.should =~ /are hidden/
+    end
+
+    it 'should provide nothing when "yes"' do
+      quiz = stub({
+        show_correct_answers: true,
+        show_correct_answers_at: nil,
+        hide_correct_answers_at: nil
+      })
+
+      message = render_correct_answer_protection(quiz)
+      message.should == nil
+    end
+
+    it 'should provide a useful message, and an availability date, when "show at" is set' do
+      quiz = stub({
+        show_correct_answers: true,
+        show_correct_answers_at: 1.day.from_now,
+        hide_correct_answers_at: nil
+      })
+
+      message = render_correct_answer_protection(quiz)
+      message.should =~ /will be available/
+    end
+
+    it 'should provide a useful message, and a date, when "hide at" is set' do
+      quiz = stub({
+        show_correct_answers: true,
+        show_correct_answers_at: nil,
+        hide_correct_answers_at: 1.day.from_now
+      })
+
+      message = render_correct_answer_protection(quiz)
+      message.should =~ /are available until/
+    end
+  end
+
+  context "#point_value_for_input" do
+    let(:user_answer) { @user_answer }
+    let(:question) { { points_possible: 5 } }
+    let(:quiz) { @quiz }
+
+    before do
+      @quiz = stub(quiz_type: 'graded_survey')
+      @user_answer = { correct: 'undefined', points: 5 }
+    end
+
+    it "returns user_answer[:points] if correct is true/false" do
+      [true, false].each do |bool|
+        user_answer[:correct] = bool
+        point_value_for_input(user_answer, question).should == user_answer[:points]
+      end
+    end
+
+    it "returns -- if quiz is practice quiz or assignment" do
+      ['assignment', 'practice_quiz'].each do |quiz_type|
+        @quiz.expects(:quiz_type).returns quiz_type
+        point_value_for_input(user_answer, question).should == "--"
+      end
+    end
+
+    it "returns points possible for the question if (un)graded survey" do
+      ['survey', 'graded_survey'].each do |quiz_type|
+        @quiz.expects(:quiz_type).returns quiz_type
+        point_value_for_input(user_answer, question).should ==
+          question[:points_possible]
+      end
     end
   end
 end

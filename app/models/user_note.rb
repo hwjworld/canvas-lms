@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -21,6 +21,7 @@ class UserNote < ActiveRecord::Base
   attr_accessible :user, :note, :title, :creator
   belongs_to :user
   belongs_to :creator, :class_name => 'User', :foreign_key => :created_by_id
+  validates_presence_of :user_id, :created_by_id, :workflow_state
   validates_length_of :note, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
   after_save :update_last_user_note
 
@@ -31,8 +32,8 @@ class UserNote < ActiveRecord::Base
     state :deleted
   end
   
-  named_scope :active, :conditions => ['workflow_state != ?', 'deleted']
-  named_scope :desc_by_date, :order => 'created_at DESC'
+  scope :active, where("workflow_state<>'deleted'")
+  scope :desc_by_date, order('created_at DESC')
   
   set_policy do
     given { |user| self.creator == user }
@@ -48,7 +49,7 @@ class UserNote < ActiveRecord::Base
   alias_method :destroy!, :destroy
   def destroy
     self.workflow_state = 'deleted'
-    self.deleted_at = Time.now
+    self.deleted_at = Time.now.utc
     save!
   end
   

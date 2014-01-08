@@ -44,8 +44,13 @@ describe Conversation do
       Conversation.initiate(users, false)
     end
 
+    it "should populate subject if provided" do
+      users = 2.times.map{ user }
+      Conversation.initiate(users, nil, :subject => 'lunch').subject.should == 'lunch'
+    end
+
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should create the conversation on the appropriate shard" do
         users = []
@@ -118,6 +123,25 @@ describe Conversation do
       convo.participants.size.should == 3 # includes the sender (though we don't show him in the ui)
     end
 
+    it "should only add participants to messages the existing user has participants on" do
+      sender = user
+      recipient = user
+      root_convo = Conversation.initiate([sender, recipient], false)
+      msgs = []
+      msgs << root_convo.add_message(sender, "first message body")  <<
+              root_convo.add_message(sender, "second message body") <<
+              root_convo.add_message(sender, "third message body")  <<
+              root_convo.add_message(sender, "fourth message body")
+      sender.conversations.first.remove_messages(msgs[0])
+      sender.conversations.first.delete_messages(msgs[1])
+
+      new_guy = user
+      root_convo.add_participants(sender, [new_guy])
+      # -1 for hard delete msg, +1 for generated message. soft deleted should still be added.
+      new_guy.conversations.first.messages.size.should eql(msgs.size - 1 + 1)
+    end
+
+
     it "should not re-add existing participants to group conversations" do
       sender = user
       recipient = user
@@ -138,7 +162,7 @@ describe Conversation do
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should add participants to the proper shards" do
         users = []
@@ -193,12 +217,24 @@ describe Conversation do
         @sender.conversations.first.reload.message_count.should eql 1
         @recipient.conversations.first.reload.message_count.should eql 2
       end
+
+      it "should decrement when deleting messages" do
+        root_convo = Conversation.initiate([@sender, @recipient], false)
+        root_convo.add_message(@sender, 'test')
+        msg = root_convo.add_message(@sender, 'test2')
+        @sender.conversations.first.message_count.should eql 2
+        @recipient.conversations.first.message_count.should eql 2
+
+        @sender.conversations.first.delete_messages(msg)
+        @sender.conversations.first.reload.message_count.should eql 1
+        @recipient.conversations.first.reload.message_count.should eql 2
+      end
     end
 
     it_should_behave_like "message counts"
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
       it_should_behave_like "message counts"
     end
   end
@@ -284,7 +320,7 @@ describe Conversation do
 
     it_should_behave_like "unread counts"
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
       it_should_behave_like "unread counts"
     end
   end
@@ -481,8 +517,38 @@ describe Conversation do
       conversation.conversation_messages.size.should eql 1
     end
 
+    it "should undelete visible soft-deleted message participants" do
+      u1 = user
+      u2 = user
+      conversation = Conversation.initiate([u1, u2], true)
+      # a message to keep the conversation visible to u2 after remove_messages on the asset's message
+      previous_message = conversation.add_message(u1, 'hello')
+      message = conversation.add_message(u1, 'test message')
+
+      # make u1's conversation invisible so they won't be updated.
+      u1.conversations.first.remove_messages(previous_message, message)
+      u1.conversations.should be_empty
+
+      # u2 only deletes the asset's message, but conversations is still visible
+      u2.conversations.first.remove_messages(message)
+      u2.conversations.first.messages.size.should eql 1
+
+      asset = Submission.new(:user => u1)
+      asset.expects(:conversation_groups).returns([[u1, u2]])
+      asset.expects(:lock!).returns(true)
+      asset.expects(:conversation_messages).at_least_once.returns([message])
+      asset.expects(:conversation_message_data).returns({:created_at => Time.now.utc, :author => u1, :body => "asdf"})
+
+      Conversation.update_all_for_asset asset, :update_message => true, :only_existing => true
+      conversation.conversation_messages.size.should eql 2
+      u1.conversations.should be_empty
+      # but u1 should still have the soft-deleted participant
+      u1.all_conversations.first.all_messages.size.should eql 2
+      u2.conversations.first.messages.size.should eql 2
+    end
+
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should re-use conversations from another shard" do
         u1 = @shard1.activate { user }
@@ -617,6 +683,23 @@ describe Conversation do
         u2.conversations.first.tags.should eql [@course1.asset_string] # just the one, since it was explicit
         u3.conversations.first.tags.should eql [@course2.asset_string] # not in course1, so fall back to common ones (i.e. course2)
       end
+
+      context "sharding" do
+        specs_require_sharding
+
+        it "should set all tags on the other shard's participants" do
+          course1 = @shard1.activate{ course(:account => Account.create!, :active_all => true) }
+          course2 = @shard2.activate{ course(:account => Account.create!, :active_all => true) }
+          user1 = student_in_course(:course => course1, :active_all => true).user
+          user2 = student_in_course(:course => course2, :active_all => true).user
+          student_in_course(:course => course2, :user => user1, :active_all => true)
+          student_in_course(:course => course1, :user => user2, :active_all => true)
+          conversation = Conversation.initiate([user1, user2], false)
+          conversation.add_message(user1, 'test')
+          user1.conversations.first.tags.sort.should eql [course1.asset_string, course2.asset_string].sort
+          user2.conversations.first.tags.sort.should eql [course1.asset_string, course2.asset_string].sort
+        end
+      end
     end
 
     context "deletion" do
@@ -665,14 +748,14 @@ describe Conversation do
         u3 = student_in_course(:active_all => true, :course => @course2).user
         conversation = Conversation.initiate([u1, u2, u3], false)
         conversation.add_message(u1, 'test', :tags => [@course1.asset_string])
-        u1.conversations.first.tags.should eql [@course1.asset_string]
-        u2.conversations.first.tags.should eql [@course1.asset_string]
-        u3.conversations.first.tags.should eql [@course2.asset_string]
+        u1.conversations.first.tags.should == [@course1.asset_string]
+        u2.conversations.first.tags.should == [@course1.asset_string]
+        u3.conversations.first.tags.should == [@course2.asset_string]
 
         conversation.add_message(u1, 'another', :tags => [@course2.asset_string, "course_0"])
-        u1.conversations.first.tags.should eql [@course1.asset_string]
-        u2.conversations.first.tags.sort.should eql [@course1.asset_string, @course2.asset_string].sort
-        u3.conversations.first.tags.should eql [@course2.asset_string]
+        u1.conversations.first.tags.should == [@course1.asset_string]
+        u2.conversations.first.tags.sort.should == [@course1.asset_string, @course2.asset_string].sort
+        u3.conversations.first.tags.should == [@course2.asset_string]
       end
 
       it "should ignore conversation_participants without a valid user" do
@@ -684,18 +767,17 @@ describe Conversation do
         u3 = student_in_course(:active_all => true, :course => @course2).user
         conversation = Conversation.initiate([u1, u2, u3], false)
         conversation.add_message(u1, 'test', :tags => [@course1.asset_string])
-        u1.conversations.first.tags.should eql [@course1.asset_string]
-        u2.conversations.first.tags.should eql [@course1.asset_string]
-        u3.conversations.first.tags.should eql [@course2.asset_string]
+        u1.conversations.first.tags.should == [@course1.asset_string]
+        u2.conversations.first.tags.should == [@course1.asset_string]
+        u3.conversations.first.tags.should == [@course2.asset_string]
         broken_one = u3.conversations.first
-        broken_one.user_id = nil
-        broken_one.tags = []
-        broken_one.save!
+        ConversationParticipant.where(id: broken_one).update_all(user_id: -1, tags: '')
 
+        conversation.reload
         conversation.add_message(u1, 'another', :tags => [@course2.asset_string, "course_0"])
-        u1.conversations.first.tags.should eql [@course1.asset_string]
-        u2.conversations.first.tags.sort.should eql [@course1.asset_string, @course2.asset_string].sort
-        broken_one.reload.tags.should eql []
+        u1.conversations.first.tags.should == [@course1.asset_string]
+        u2.conversations.first.tags.sort.should == [@course1.asset_string]
+        broken_one.reload.tags.should == []
       end
     end
 
@@ -838,8 +920,7 @@ describe Conversation do
 
       it "should ignore conversation_participants without a user" do
         broken_one = @u3.conversations.first
-        broken_one.user_id = nil
-        broken_one.save!
+        ConversationParticipant.where(id: broken_one).update_all(user_id: -1)
 
         @conversation.migrate_context_tags!
 
@@ -847,6 +928,138 @@ describe Conversation do
         @u1.conversations.first.tags.should eql [@course1.asset_string]
         @u2.conversations.first.tags.should eql [@course1.asset_string]
         broken_one.reload.tags.should eql [] # skipped
+      end
+    end
+
+    context 'tag updates' do
+      before(:each) do
+        @teacher    = teacher_in_course(:active_all => true).user
+        @student    = student_in_course(:active_all => true, :course => @course).user
+        @old_course = @course
+      end
+
+      it "should remove old tags and add new ones" do
+        conversation = Conversation.initiate([@teacher, @student], true)
+        conversation.add_message(@teacher, 'first message')
+
+        new_course = course
+        new_course.offer!
+        new_course.enroll_teacher(@teacher).accept!
+        new_course.enroll_student(@student).accept!
+
+        @old_course.complete!
+
+        third_course = course
+        third_course.offer!
+        third_course.enroll_teacher(@teacher).accept!
+
+        conversation.reload
+        conversation.add_message(@student, 'second message')
+
+        conversation.conversation_participants.each do |participant|
+          participant.reload
+          participant.tags.should == [new_course.asset_string]
+        end
+      end
+
+      it "should continue to use old tags if there are no current shared contexts" do
+        conversation = Conversation.initiate([@teacher, @student], true)
+        conversation.add_message(@teacher, 'first message')
+
+        @old_course.complete!
+
+        teacher_course = course
+        teacher_course.offer!
+        teacher_course.enroll_teacher(@teacher).accept!
+
+        student_course = course
+        student_course.offer!
+        student_course.enroll_student(@student).accept!
+
+        conversation.add_message(@student, 'second message')
+
+        conversation.conversation_participants.each do |participant|
+          participant.reload
+          participant.tags.should == [@old_course.asset_string]
+        end
+      end
+
+      it "should use concluded tags from multiple courses" do
+        old_course2 = course
+
+        old_course2.offer!
+        old_course2.enroll_teacher(@teacher).accept!
+        old_course2.enroll_student(@student).accept!
+
+        conversation = Conversation.initiate([@teacher, @student], true)
+        conversation.add_message(@teacher, 'first message')
+
+        [@old_course, old_course2].each { |c| c.complete! }
+
+        teacher_course = course
+        teacher_course.offer!
+        teacher_course.enroll_teacher(@teacher).accept!
+
+        student_course = course
+        student_course.offer!
+        student_course.enroll_student(@student).accept!
+
+        conversation.add_message(@teacher, 'second message')
+
+        conversation.conversation_participants.each do |participant|
+          participant.reload
+          participant.tags.sort.should == [@old_course, old_course2].map(&:asset_string).sort
+        end
+      end
+
+      it "should include concluded group contexts when no active ones exist" do
+        student1 = student_in_course(:active_all => true, :course => @old_course).user
+        student2 = student_in_course(:active_all => true, :course => @old_course).user
+
+        group      = Group.create!(:context => @old_course)
+        [student1, student2].each { |s| group.users << s }
+
+        conversation = Conversation.initiate([student1, student2], true)
+        conversation.add_message(student1, 'first message')
+
+        @old_course.complete!
+        group.complete!
+
+        conversation.add_message(student2, 'second message')
+
+        conversation.conversation_participants.each do |participant|
+          participant.reload
+          participant.tags.should include(group.asset_string)
+        end
+      end
+
+      it "should replace concluded group contexts with active ones" do
+        student1 = student_in_course(:active_all => true, :course => @old_course).user
+        student2 = student_in_course(:active_all => true, :course => @old_course).user
+
+        old_group = Group.create!(:context => @old_course)
+        [student1, student2].each { |s| old_group.users << s }
+
+        conversation = Conversation.initiate([student1, student2], true)
+        conversation.add_message(student1, 'first message')
+
+        @old_course.complete!
+        old_group.destroy
+
+        new_course = course
+        new_course.offer!
+        [student1, student2].each { |s| new_course.enroll_student(s).accept! }
+        new_group = Group.create!(:context => new_course)
+        new_group.users << student1
+        new_group.users << student2
+
+        conversation.reload
+        conversation.add_message(student2, 'second message')
+
+        conversation.conversation_participants.each do |participant|
+          participant.reload
+          participant.tags.sort.should == [new_group, new_course].map(&:asset_string).sort
+        end
       end
     end
   end
@@ -873,8 +1086,8 @@ describe Conversation do
     source.add_participants(sender, [source_user]) if source_user
     target.add_participants(sender, [target_user]) if target_user
     target_user = source_user || target_user
-    message_count = source.shard.activate { ConversationMessageParticipant.count(:all, :joins => :conversation_message, :conditions => {:user_id => target_user.id, :conversation_messages => {:conversation_id => source.id}}) }
-    message_count += target.shard.activate { ConversationMessageParticipant.count(:all, :joins => :conversation_message, :conditions => {:user_id => target_user.id, :conversation_messages => {:conversation_id => target.id}}) }
+    message_count = source.shard.activate { ConversationMessageParticipant.joins(:conversation_message).where(:user_id => target_user, :conversation_messages => {:conversation_id => source}).count }
+    message_count += target.shard.activate { ConversationMessageParticipant.joins(:conversation_message).where(:user_id => target_user, :conversation_messages => {:conversation_id => target}).count }
 
     source.merge_into(target)
 
@@ -893,7 +1106,7 @@ describe Conversation do
     # non-sharding cases are covered by ConversationParticipant#move_to_user specs
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       before do
         @sender = User.create!(:name => 'a')

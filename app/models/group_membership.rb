@@ -25,24 +25,27 @@ class GroupMembership < ActiveRecord::Base
 
   attr_accessible :group, :user, :workflow_state, :moderator
   
-  before_save :ensure_mutually_exclusive_membership
   before_save :assign_uuid
   before_save :auto_join
   before_save :capture_old_group_id
 
+  validates_presence_of :group_id, :user_id, :workflow_state
   before_validation :verify_section_homogeneity_if_necessary
+  validate :validate_within_group_limit
 
+  after_save :ensure_mutually_exclusive_membership
   after_save :touch_groups
   after_save :check_auto_follow_group
+  after_save :update_cached_due_dates
   after_destroy :touch_groups
   after_destroy :check_auto_follow_group
   
   has_a_broadcast_policy
   
-  named_scope :include_user, :include => :user
+  scope :include_user, includes(:user)
   
-  named_scope :active, :conditions => ['group_memberships.workflow_state != ?', 'deleted']
-  named_scope :moderators, :conditions => { :moderator => true }
+  scope :active, where("group_memberships.workflow_state<>'deleted'")
+  scope :moderators, where(:moderator => true)
 
   alias_method :context, :group
   
@@ -90,8 +93,9 @@ class GroupMembership < ActiveRecord::Base
 
   def ensure_mutually_exclusive_membership
     return unless self.group
+    return if self.deleted?
     peer_groups = self.group.peer_groups.map(&:id)
-    GroupMembership.active.find(:all, :conditions => { :group_id => peer_groups, :user_id => self.user_id }).each {|gm| gm.destroy }
+    GroupMembership.active.where(:group_id => peer_groups, :user_id => self.user_id).destroy_all
   end
   protected :ensure_mutually_exclusive_membership
   
@@ -112,6 +116,13 @@ class GroupMembership < ActiveRecord::Base
     end
   end
   protected :verify_section_homogeneity_if_necessary
+
+  def validate_within_group_limit
+    if new_record? && group.full?
+      errors.add(:group_id, t('errors.group_full', 'The group is full.'))
+    end
+  end
+  protected :validate_within_group_limit
   
   attr_accessor :old_group_id
   def capture_old_group_id
@@ -124,15 +135,21 @@ class GroupMembership < ActiveRecord::Base
     if (self.id_changed? || self.workflow_state_changed?) && self.active?
       UserFollow.create_follow(self.user, self.group)
     elsif self.destroyed? || (self.workflow_state_changed? && self.deleted?)
-      user_follow = self.user.shard.activate { self.user.user_follows.find(:first, :conditions => { :followed_item_id => self.group_id, :followed_item_type => 'Group' }) }
+      user_follow = self.user.shard.activate { self.user.user_follows.where(:followed_item_id => self.group_id, :followed_item_type => 'Group').first }
       user_follow.try(:destroy)
+    end
+  end
+
+  def update_cached_due_dates
+    if workflow_state_changed? && group.group_category_id && group.context_type == 'Course'
+      DueDateCacher.recompute_course(group.context_id, Assignment.where(context_type: group.context_type, context_id: group.context_id, group_category_id: group.group_category_id).pluck(:id))
     end
   end
   
   def touch_groups
     groups_to_touch = [ self.group_id ]
     groups_to_touch << self.old_group_id if self.old_group_id
-    Group.update_all({ :updated_at => Time.now.utc }, { :id => groups_to_touch })
+    Group.where(:id => groups_to_touch).update_all(:updated_at => Time.now.utc)
   end
   protected :touch_groups
   

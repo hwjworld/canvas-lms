@@ -1,7 +1,7 @@
 module Technoweenie # :nodoc:
   module AttachmentFu # :nodoc:
     @@default_processors = %w(ImageScience Rmagick MiniMagick Gd2 CoreImage)
-    @@tempfile_path      = File.join(RAILS_ROOT, 'tmp', 'attachment_fu')
+    @@tempfile_path      = Rails.root.join('tmp', 'attachment_fu').to_s
     # Instructure: I (ryan shaw) just copied and pasted this from http://github.com/technoweenie/attachment_fu/blob/master/lib/technoweenie/attachment_fu.rb
     @@content_types      = [
       'image/jpeg',
@@ -163,14 +163,17 @@ module Technoweenie # :nodoc:
       end
 
       def self.extended(base)
-        base.class_inheritable_accessor :attachment_options
+        base.class_attribute :attachment_options
         base.before_destroy :destroy_thumbnails
         base.before_validation :set_size_from_temp_path
         base.after_save :after_process_attachment
         base.after_destroy :destroy_file
         base.after_validation :process_attachment
-        if defined?(::ActiveSupport::Callbacks)
-          base.define_callbacks :after_resize, :after_attachment_saved, :before_thumbnail_saved
+        if CANVAS_RAILS2
+          base.define_callbacks :after_resize, :before_attachment_saved, :after_attachment_saved, :before_thumbnail_saved, :after_save_and_attachment_processing
+        else
+          base.define_model_callbacks :resize, :attachment_saved, :save_and_attachment_processing, only: [:after]
+          base.define_model_callbacks :attachment_saved, :thumbnail_saved, only: [:before]
         end
       end
 
@@ -223,7 +226,7 @@ module Technoweenie # :nodoc:
 
       # Copies the given file path to a new tempfile, returning the closed tempfile.
       def copy_to_temp_file(file, temp_base_name)
-        returning Tempfile.new(temp_base_name, Technoweenie::AttachmentFu.tempfile_path) do |tmp|
+        Tempfile.new(temp_base_name, Technoweenie::AttachmentFu.tempfile_path).tap do |tmp|
           tmp.close
           FileUtils.cp file, tmp.path
         end
@@ -231,7 +234,7 @@ module Technoweenie # :nodoc:
 
       # Writes the given data to a new tempfile, returning the closed tempfile.
       def write_to_temp_file(data, temp_base_name)
-        returning Tempfile.new(temp_base_name, Technoweenie::AttachmentFu.tempfile_path) do |tmp|
+        Tempfile.new(temp_base_name, Technoweenie::AttachmentFu.tempfile_path).tap do |tmp|
           tmp.binmode
           tmp.write data
           tmp.close
@@ -276,7 +279,7 @@ module Technoweenie # :nodoc:
       # Creates or updates the thumbnail for the current attachment.
       def create_or_update_thumbnail(temp_file, file_name_suffix, *size)
         thumbnailable? || raise(ThumbnailError.new("Can't create a thumbnail if the content type is not an image or there is no parent_id column"))
-        returning find_or_initialize_thumbnail(file_name_suffix) do |thumb|
+        find_or_initialize_thumbnail(file_name_suffix).tap do |thumb|
           thumb.attributes = {
             :content_type             => content_type,
             :filename                 => thumbnail_name_for(file_name_suffix),
@@ -352,7 +355,6 @@ module Technoweenie # :nodoc:
             self.root_attachment = nil
             self.root_attachment_id = nil
             self.scribd_mime_type_id = nil
-            self.scribd_user = nil
             self.submitted_to_scribd_at = nil
             self.workflow_state = nil
             self.scribd_doc = nil
@@ -398,8 +400,8 @@ module Technoweenie # :nodoc:
 
       def find_existing_attachment_for_md5
         if self.md5.present? && ns = self.infer_namespace
-          scope = Attachment.scoped(:conditions => ["md5 = ? AND namespace = ? AND root_attachment_id IS NULL AND content_type = ?", md5, ns, content_type])
-          scope = scope.scoped(:conditions => ["id <> ?", id]) unless new_record?
+          scope = Attachment.where(:md5 => md5, :namespace => ns, :root_attachment_id => nil, :content_type => content_type)
+          scope = scope.where("id<>?", self) unless new_record?
           scope.first
         end
       end
@@ -482,7 +484,7 @@ module Technoweenie # :nodoc:
         end
 
         def sanitize_filename(filename)
-          returning filename.strip do |name|
+          filename.strip.tap do |name|
             # NOTE: File.basename doesn't work right with Windows paths on Unix
             # get only the filename, not the whole path
             name.gsub! /^.*(\\|\/)/, ''
@@ -515,6 +517,7 @@ module Technoweenie # :nodoc:
         # Stub for a #process_attachment method in a processor
         def process_attachment
           @saved_attachment = save_attachment?
+          callback :before_attachment_saved if @saved_attachment
         end
 
         # Cleans up after processing.  Thumbnails are created, the attachment is stored to the backend, and the temp_paths are cleared.
@@ -526,10 +529,35 @@ module Technoweenie # :nodoc:
             #   temp_file = temp_path || create_temp_file
             #   attachment_options[:thumbnails].each { |suffix, size| create_or_update_thumbnail(temp_file, suffix, *size) }
             # end
-            save_to_storage
-            @temp_paths.clear
-            @saved_attachment = nil
-            callback :after_attachment_saved
+
+            # In normal attachment upload usage, the only transaction we should
+            # be inside is the AR#save transaction. If that's the case, defer
+            # the upload and callbacks until after the transaction commits. If
+            # the upload fails, that will leave this attachment in an
+            # unattached state, but that's already the case in other error
+            # situations as well.
+            #
+            # If there is no transaction, or more than one transaction, then
+            # just upload immediately. This can happen if
+            # after_process_attachment is called directly, or if we're inside
+            # an rspec test run (which is wrapped in an outer transaction).
+            # It can also happen if somebody explicitly uploads file data
+            # inside a .transaction block, which we normally shouldn't do.
+            save_and_callbacks = proc do
+              save_to_storage
+              @temp_paths.clear
+              @saved_attachment = nil
+              callback :after_attachment_saved
+              callback :after_save_and_attachment_processing
+            end
+
+            if connection.open_transactions == 1
+              connection.after_transaction_commit(&save_and_callbacks)
+            else
+              save_and_callbacks.call()
+            end
+          else
+            callback :after_save_and_attachment_processing
           end
         end
 

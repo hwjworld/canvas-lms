@@ -21,11 +21,11 @@ class QuizQuestion::MultipleChoiceQuestion < QuizQuestion::Base
     answer_text = user_answer.answer_text
     return nil if answer_text.nil?
     answer_id = answer_text.to_i
-    answer = @question_data[:answers].find { |a| a[:id] == answer_id }
+    answer = @question_data.answers.find { |a| a[:id] == answer_id }
+
     return 0 unless answer
-    user_answer.answer_id = answer[:id]
-    return 0 if answer[:weight] != 100
-    return 1
+    user_answer.answer_id = answer[:id] || answer[:answer_id]
+    answer[:weight] == 100 ? 1 : 0
   end
 end
 

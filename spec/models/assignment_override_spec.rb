@@ -129,7 +129,7 @@ describe AssignmentOverride do
     end
 
     def invalid_id_for_model(model)
-      (model.scoped(:select => 'max(id) as id').first.id || 0) + 1
+      (model.maximum(:id) || 0) + 1
     end
 
     it "should reject non-nil set_id with an adhoc set" do
@@ -159,9 +159,9 @@ describe AssignmentOverride do
     end
 
     it "should accept group sets" do
-      @category = @course.group_categories.create!
+      @category = group_category
       @override.assignment.group_category = @category
-      @override.set = @category.groups.create!
+      @override.set = @category.groups.create!(context: @override.assignment.context)
       @override.should be_valid
     end
 
@@ -185,20 +185,28 @@ describe AssignmentOverride do
       @override.should_not be_valid
     end
 
+    # necessary to allow soft deleting overrides that belonged to a cross
+    # listed section after it is de-cross-listed
+    it "should not reject sections in different course than assignment when deleted" do
+      @other_course = course_model
+      @override.set = @other_course.default_section
+      @override.workflow_state = 'deleted'
+      @override.should be_valid
+    end
+
     it "should reject groups in different category than assignment" do
-      @assignment.group_category = @course.group_categories.create!
-      @category = @course.group_categories.create!
-      @override.set = @category.groups.create
+      @assignment.group_category = group_category
+      @category = group_category(name: "bar")
+      @override.set = @category.groups.create!(context: @assignment.context)
       @override.should_not be_valid
     end
 
-    # necessary to allow deleting but otherwise keeping assignments that were
-    # for an assignment's previous group category when the assignment's group
-    # category changes
+    # necessary to allow soft deleting overrides that were for an assignment's
+    # previous group category when the assignment's group category changes
     it "should not reject groups in different category than assignment when deleted" do
-      @assignment.group_category = @course.group_categories.create!
-      @category = @course.group_categories.create!
-      @override.set = @category.groups.create
+      @assignment.group_category = group_category
+      @category = group_category(name: "bar")
+      @override.set = @category.groups.create!(context: @assignment.context)
       @override.workflow_state = 'deleted'
       @override.should be_valid
     end
@@ -257,8 +265,8 @@ describe AssignmentOverride do
     end
 
     it "should default title to the name of the group" do
-      @assignment.group_category = @course.group_categories.create!
-      @group = @assignment.group_category.groups.create!
+      @assignment.group_category = group_category
+      @group = @assignment.group_category.groups.create!(context: @assignment.context)
       @group.name = 'Group Test Value'
       @override.set = @group
       @override.title = 'Other Value'
@@ -456,7 +464,7 @@ describe AssignmentOverride do
 
     context "group overrides" do
       before :each do
-        @assignment.group_category = @course.group_categories.create!
+        @assignment.group_category = group_category
         @assignment.save!
 
         @group = @assignment.group_category.groups.create!(:context => @course)
@@ -582,18 +590,77 @@ describe AssignmentOverride do
     end
   end
 
-  describe "recompute_submission_lateness" do
-    it "is called in a delayed job when due_at changes" do
-      override = assignment_override_model
-      override.override_due_at(5.days.from_now)
-      override.expects(:send_later_if_production).with(:recompute_submission_lateness)
-      override.save
+  describe "updating cached due dates" do
+    before do
+      @override = assignment_override_model
+      @override.override_due_at(3.days.from_now)
+      @override.save
     end
 
-    it "is not called when due_at doesn't change" do
-      override = assignment_override_model
-      override.expects(:send_later_if_production).with(:recompute_submission_lateness).never
-      override.save
+    it "triggers when applicable override is created" do
+      DueDateCacher.expects(:recompute).with(@assignment)
+      new_override = @assignment.assignment_overrides.build
+      new_override.title = 'New Override'
+      new_override.override_due_at(3.days.from_now)
+      new_override.save!
+    end
+
+    it "triggers when overridden due_at changes" do
+      DueDateCacher.expects(:recompute).with(@assignment)
+      @override.override_due_at(5.days.from_now)
+      @override.save
+    end
+
+    it "triggers when overridden due_at changes to nil" do
+      DueDateCacher.expects(:recompute).with(@assignment)
+      @override.override_due_at(nil)
+      @override.save
+    end
+
+    it "triggers when due_at_overridden changes" do
+      DueDateCacher.expects(:recompute).with(@assignment)
+      @override.clear_due_at_override
+      @override.save
+    end
+
+    it "triggers when applicable override deleted" do
+      DueDateCacher.expects(:recompute).with(@assignment)
+      @override.destroy
+    end
+
+    it "triggers when applicable override undeleted" do
+      @override.destroy
+
+      DueDateCacher.expects(:recompute).with(@assignment)
+      @override.workflow_state = 'active'
+      @override.save
+    end
+
+    it "does not trigger when non-applicable override is created" do
+      DueDateCacher.expects(:recompute).never
+      @assignment.assignment_overrides.create
+    end
+
+    it "does not trigger when non-applicable override deleted" do
+      @override.clear_due_at_override
+      @override.save
+
+      DueDateCacher.expects(:recompute).never
+      @override.destroy
+    end
+
+    it "does not trigger when non-applicable override undeleted" do
+      @override.clear_due_at_override
+      @override.destroy
+
+      DueDateCacher.expects(:recompute).never
+      @override.workflow_state = 'active'
+      @override.save
+    end
+
+    it "does not trigger when nothing changed" do
+      DueDateCacher.expects(:recompute).never
+      @override.save
     end
   end
 

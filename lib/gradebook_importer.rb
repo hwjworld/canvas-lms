@@ -40,15 +40,15 @@ class GradebookImporter
     @contents = contents
   end
   
-  FasterCSV::Converters[:nil] = lambda{|e| (e.nil? ? e : raise) rescue e}
+  CSV::Converters[:nil] = lambda{|e| (e.nil? ? e : raise) rescue e}
   
   def parse!
     @student_columns = 3 # name, user id, section
     # preload a ton of data that presumably we'll be querying
-    @all_assignments = @context.assignments.active.gradeable.find(:all, :select => 'id, title, points_possible, grading_type').inject({}) { |r, a| r[a.id] = a; r}
-    @all_students = @context.students.find(:all, :select => 'users.id, name, sortable_name').inject({}) { |r, s| r[s.id] = s; r }
+    @all_assignments = @context.assignments.active.gradeable.select([:id, :title, :points_possible, :grading_type]).index_by(&:id)
+    @all_students = @context.students.select(['users.id', :name, :sortable_name]).index_by(&:id)
 
-    csv = FasterCSV.new(self.contents, :converters => :nil)
+    csv = CSV.new(self.contents, :converters => :nil)
     header = csv.shift
     @assignments = process_header(header)
 
@@ -72,17 +72,17 @@ class GradebookImporter
     @missing_students = @all_students.values - @students if @missing_student
 
     # look up existing score for everything that was provided
-    @original_submissions = @context.submissions.find(:all,
-      :select => 'assignment_id, user_id, score',
-      :include => {:exclude => :quiz_submission},
-      :conditions => { :assignment_id => (@missing_assignment ? @all_assignments.values : @assignments).map(&:id),
-                       :user_id => (@missing_student ? @all_students.values : @students).map(&:id)}).map do |s|
-        {
-          :user_id => s.user_id,
-          :assignment_id => s.assignment_id,
-          :score => s.score.to_s
-        }
-      end
+    @original_submissions = @context.submissions.except(:includes).
+        select([:assignment_id, :user_id, :score]).
+        where(:assignment_id => (@missing_assignment ? @all_assignments.values : @assignments),
+              :user_id => (@missing_student ? @all_students.values : @students)).
+        map do |s|
+          {
+            :user_id => s.user_id,
+            :assignment_id => s.assignment_id,
+            :score => s.score.to_s
+          }
+        end
 
     # cache the score on the existing object
     original_submissions_by_student = @original_submissions.inject({}) do |r, s|
@@ -184,7 +184,7 @@ class GradebookImporter
     student.write_attribute(:submissions, l)
   end
   
-  def to_json
+  def as_json(options={})
     {
       :students => @students.map { |s| student_to_hash(s) },
       :assignments => @assignments.map { |a| assignment_to_hash(a) },
@@ -194,12 +194,12 @@ class GradebookImporter
       },
       :original_submissions => @original_submissions,
       :unchanged_assignments => @unchanged_assignments
-    }.to_json
+    }
   end
   
   protected
     def all_pseudonyms
-      @all_pseudonyms ||= @context.root_account.pseudonyms.active.find(:all, :select => 'id, unique_id, sis_user_id, user_id', :conditions => {:user_id => @all_students.values.map(&:id)})
+      @all_pseudonyms ||= @context.root_account.pseudonyms.active.select([:id, :unique_id, :sis_user_id, :user_id]).where(:user_id => @all_students.values).all
     end
 
     def pseudonyms_by_sis_id

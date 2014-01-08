@@ -99,14 +99,6 @@ shared_examples_for 'a backend' do
       @job = create_job
       Delayed::Job.find_available(5).should include(@job)
     end
-    
-    it "should find expired jobs" do
-      @job = create_job
-      Delayed::Job.get_and_lock_next_available('other_worker').should == @job
-      @job.update_attribute(:locked_at, Delayed::Job.db_time_now - 2.minutes)
-      Delayed::Job.unlock_expired_jobs(1.minute)
-      Delayed::Job.find_available(5).should include(@job)
-    end
   end
   
   context "when another worker is already performing an task, it" do
@@ -120,23 +112,8 @@ shared_examples_for 'a backend' do
       Delayed::Job.get_and_lock_next_available('worker2').should be_nil
     end
 
-    it "should allow a second worker to get exclusive access if the timeout has passed" do
-      @job.update_attribute(:locked_at, 5.hours.ago)
-      Delayed::Job.unlock_expired_jobs(4.hours)
-      Delayed::Job.get_and_lock_next_available('worker2').should == @job
-      @job.reload
-      @job.locked_by.should == 'worker2'
-      @job.locked_at.should > 1.minute.ago
-    end
-
     it "should not be found by another worker" do
       Delayed::Job.find_available(1).length.should == 0
-    end
-
-    it "should be found by another worker if the time has expired" do
-      @job.update_attribute(:locked_at, 5.hours.ago)
-      Delayed::Job.unlock_expired_jobs(4.hours)
-      Delayed::Job.find_available(5).length.should == 1
     end
   end
 
@@ -146,12 +123,12 @@ shared_examples_for 'a backend' do
     end
 
     it "should be the method that will be called if its a performable method object" do
-      @job = Story.send_later(:create)
+      @job = Story.send_later_enqueue_args(:create, no_delay: true)
       @job.name.should == "Story.create"
     end
 
     it "should be the instance method that will be called if its a performable method object" do
-      @job = Story.create(:text => "...").send_later(:save)
+      @job = Story.create(:text => "...").send_later_enqueue_args(:save, no_delay: true)
       @job.name.should == 'Story#save'
     end
   end
@@ -341,6 +318,34 @@ shared_examples_for 'a backend' do
         job = Delayed::Job.enqueue(SimpleJob.new, :n_strand => 'njobs')
         job.strand.should == "njobs:2"
       end
+
+      context "with two parameters" do
+        it "should use the first param as the setting to read" do
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "123"])
+          job.strand.should == "njobs/123"
+          Setting.set("njobs_num_strands", "3")
+          Delayed::Job.expects(:rand).with(3).returns(1)
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "123"])
+          job.strand.should == "njobs/123:2"
+        end
+
+        it "should allow overridding the setting based on the second param" do
+          Setting.set("njobs/123_num_strands", "5")
+          Delayed::Job.expects(:rand).with(5).returns(3)
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "123"])
+          job.strand.should == "njobs/123:4"
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "456"])
+          job.strand.should == "njobs/456"
+
+          Setting.set("njobs_num_strands", "3")
+          Delayed::Job.expects(:rand).with(5).returns(2)
+          Delayed::Job.expects(:rand).with(3).returns(1)
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "123"])
+          job.strand.should == "njobs/123:3"
+          job = Delayed::Job.enqueue(SimpleJob.new, n_strand: ["njobs", "456"])
+          job.strand.should == "njobs/456:2"
+        end
+      end
     end
   end
 
@@ -416,6 +421,15 @@ shared_examples_for 'a backend' do
       proc { Delayed::Periodic.cron('my SimpleJob', '*/15 * * * * *') {} }.should raise_error(ArgumentError)
     end
 
+    it "should handle jobs that are no longer scheduled" do
+      Delayed::Periodic.perform_audit!
+      Delayed::Periodic.scheduled = {}
+      job = Delayed::Job.get_and_lock_next_available('test')
+      run_job(job)
+      # shouldn't error, and the job should now be deleted
+      Delayed::Job.jobs_count(:current).should == 0
+    end
+
     it "should allow overriding schedules using periodic_jobs.yml" do
       Setting.set_config('periodic_jobs', { 'my ChangedJob' => '*/10 * * * * *' })
       Delayed::Periodic.scheduled = {}
@@ -444,7 +458,7 @@ shared_examples_for 'a backend' do
   end
 
   it "should set in_delayed_job?" do
-    job = InDelayedJobTest.send_later(:check_in_job)
+    job = InDelayedJobTest.send_later_enqueue_args(:check_in_job, no_delay: true)
     Delayed::Job.in_delayed_job?.should == false
     job.invoke_job
     Delayed::Job.in_delayed_job?.should == false
@@ -522,10 +536,10 @@ shared_examples_for 'a backend' do
 
   it "should return the jobs for a tag" do
     tag_jobs = []
-    3.times { tag_jobs << "test".send_later(:to_s) }
+    3.times { tag_jobs << "test".send_later_enqueue_args(:to_s, :no_delay => true) }
     2.times { "test".send_later(:to_i) }
-    tag_jobs << "test".send_later_enqueue_args(:to_s, :run_at => 5.hours.from_now)
-    tag_jobs << "test".send_later_enqueue_args(:to_s, :strand => "test1")
+    tag_jobs << "test".send_later_enqueue_args(:to_s, :run_at => 5.hours.from_now, :no_delay => true)
+    tag_jobs << "test".send_later_enqueue_args(:to_s, :strand => "test1", :no_delay => true)
     "test".send_later_enqueue_args(:to_i, :strand => "test1")
     create_job
 
@@ -659,18 +673,18 @@ shared_examples_for 'a backend' do
       before do
         @flavor = 'tag'
         @query = 'String#to_i'
-        @affected_jobs << "test".send_later_enqueue_args(:to_i)
-        @affected_jobs << "test".send_later_enqueue_args(:to_i, :strand => 's1')
-        @affected_jobs << "test".send_later_enqueue_args(:to_i, :run_at => 2.hours.from_now)
+        @affected_jobs << "test".send_later_enqueue_args(:to_i, :no_delay => true)
+        @affected_jobs << "test".send_later_enqueue_args(:to_i, :strand => 's1', :no_delay => true)
+        @affected_jobs << "test".send_later_enqueue_args(:to_i, :run_at => 2.hours.from_now, :no_delay => true)
         @ignored_jobs << create_job
         @ignored_jobs << create_job(:run_at => 1.hour.from_now)
       end
     end
 
     it "should hold and un-hold given job ids" do
-      j1 = "test".send_later(:to_i)
+      j1 = "test".send_later_enqueue_args(:to_i, :no_delay => true)
       j2 = create_job(:run_at => 2.hours.from_now)
-      j3 = "test".send_later_enqueue_args(:to_i, :strand => 's1')
+      j3 = "test".send_later_enqueue_args(:to_i, :strand => 's1', :no_delay => true)
       Delayed::Job.bulk_update('hold', :ids => [j1.id, j2.id]).should == 2
       j1.reload.on_hold?.should be_true
       j2.reload.on_hold?.should be_true
@@ -692,13 +706,13 @@ shared_examples_for 'a backend' do
   describe "tag_counts" do
     before do
       @cur = []
-      3.times { @cur << "test".send_later(:to_s) }
-      5.times { @cur << "test".send_later(:to_i) }
-      2.times { @cur << "test".send_later(:upcase) }
-      ("test".send_later :downcase).fail!
+      3.times { @cur << "test".send_later_enqueue_args(:to_s, no_delay: true) }
+      5.times { @cur << "test".send_later_enqueue_args(:to_i, no_delay: true) }
+      2.times { @cur << "test".send_later_enqueue_args(:upcase, no_delay: true) }
+      ("test".send_later_enqueue_args :downcase, no_delay: true).fail!
       @future = []
-      5.times { @future << "test".send_at(3.hours.from_now, :downcase) }
-      @cur << "test".send_later(:downcase)
+      5.times { @future << "test".send_later_enqueue_args(:downcase, run_at: 3.hours.from_now, no_delay: true) }
+      @cur << "test".send_later_enqueue_args(:downcase, no_delay: true)
     end
 
     it "should return a sorted list of popular current tags" do

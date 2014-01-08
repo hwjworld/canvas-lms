@@ -10,19 +10,20 @@
 <div class="question">
   <div class="header" style="background-color: transparent;">
     <input type="text" style="width: 120px;" name="question_name" aria-label="<%= t "label.question.name", "Question name" %>"/>
-    <select class="question_type" name="question_type" style="width: 150px;" aria-label="<%= t "label.question.type", "Question type" %>">
-      <option value="multiple_choice_question" style="padding: 2px;"><%= t('question_type.multiple_choice', "Multiple Choice") %></option>
-      <option value="true_false_question" style="padding: 2px;"><%= t('question_type.true_false', "True/False") %></option>
-      <option value="short_answer_question" style="padding: 2px;"><%= t('question_type.short_answer', "Fill In the Blank") %></option>
-      <option value="fill_in_multiple_blanks_question" style="padding: 2px;"><%= t('question_type.fill_in_multiple_blanks', "Fill In Multiple Blanks") %></option>
-      <option value="multiple_answers_question" style="padding: 2px;"><%= t('question_type.multiple_answers', "Multiple Answers") %></option>
-      <option value="multiple_dropdowns_question" style="padding: 2px;"><%= t('question_type.multiple_dropdowns', "Multiple Dropdowns") %></option>
-      <option value="matching_question" style="padding: 2px;"><%= t('question_type.matching', "Matching") %></option>
-      <option value="numerical_question" style="padding: 2px;"><%= t('question_type.numerical', "Numerical Answer") %></option>
-      <option value="calculated_question" style="padding: 2px;"><%= t('question_type.calculated', "Formula Question") %></option>
-      <option value="missing_word_question" style="padding: 2px;" class="missing_word"><%= t('question_type.missing_word', "Missing Word") %></option>
-      <option value="essay_question" style="padding: 2px;"><%= t('question_type.essay', "Essay Question") %></option>
-      <option value="text_only_question" style="padding: 2px;"><%= t('question_type.text_only', "Text (no question)") %></option>
+    <select class="question_type" name="question_type" aria-label="<%= t "label.question.type", "Question type" %>">
+      <option value="multiple_choice_question"><%= t('question_type.multiple_choice', "Multiple Choice") %></option>
+      <option value="true_false_question"><%= t('question_type.true_false', "True/False") %></option>
+      <option value="short_answer_question"><%= t('question_type.short_answer', "Fill In the Blank") %></option>
+      <option value="fill_in_multiple_blanks_question"><%= t('question_type.fill_in_multiple_blanks', "Fill In Multiple Blanks") %></option>
+      <option value="multiple_answers_question"><%= t('question_type.multiple_answers', "Multiple Answers") %></option>
+      <option value="multiple_dropdowns_question"><%= t('question_type.multiple_dropdowns', "Multiple Dropdowns") %></option>
+      <option value="matching_question"><%= t('question_type.matching', "Matching") %></option>
+      <option value="numerical_question"><%= t('question_type.numerical', "Numerical Answer") %></option>
+      <option value="calculated_question"><%= t('question_type.calculated', "Formula Question") %></option>
+      <option value="missing_word_question" class="missing_word"><%= t('question_type.missing_word', "Missing Word") %></option>
+      <option value="essay_question"><%= t('question_type.essay', "Essay Question") %></option>
+      <option value="file_upload_question"><%= t('question_type.file_upload', "File Upload Question") %></option>
+      <option value="text_only_question"><%= t('question_type.text_only', "Text (no question)") %></option>
     </select>
     <span class="question_points_holder">
       <span style="padding-left: 20px;"><%= before_label :points, 'pts' %></span>
@@ -66,6 +67,9 @@
     <div tabindex="0" class="essay_question_explanation explanation subheader">
       <%= t('explanations.essay', "Students will be given a text field to compose their answer.") %>
     </div>
+    <div tabindex="0" class="file_upload_question_explanation explanation subheader">
+      <%= t('explanations.file_upload', "Students will be able to upload a file for their answer.") %>
+    </div>
     <div tabindex="0" class="text_only_question_explanation explanation subheader">
       <%= t('explanations.text_only', 'This "question" will not be scored, but can be useful for introducing a set of related questions.') %>
     </div>
@@ -96,7 +100,7 @@
     </select>
     </div>
     <div class="multi_answer_sets">
-      <%= t(:show_possible_answers, "Show Possible Answers for %{question}", :question => raw("<select class='blank_id_select' aria-label='#{I18n.t('question_blank', 'Question blank')}'></select>")) %>
+      <%= t(:show_possible_answers, "Show Possible Answers for %{question}", :question => raw("<select class='blank_id_select' aria-label='#{ t(:show_possible_answers_no_question, "Show Possible Answers for")}'></select>")) %>
     </div>
     <div class="equation_answers">
       <div class="clear"></div>
@@ -110,13 +114,13 @@
         <table class="variables">
           <thead>
             <tr>
-              <th><%= t('headers.variable_name', "Variable") %></th>
-              <th><%= t('headers.variable_minimum', "Min") %></th>
-              <th><%= t('headers.variable_maximum', "Max") %></th>
-              <th><%= t('headers.variable_precision', "Decimal Places") %></th>
+              <th id='equation_var_name'><%= t('headers.variable_name', "Variable") %></th>
+              <th id='equation_var_minimum'><%= t('headers.variable_minimum', "Min") %></th>
+              <th id='equation_var_maximum'><%= t('headers.variable_maximum', "Max") %></th>
+              <th id='equation_var_precision'><%= t('headers.variable_precision', "Decimal Places") %></th>
               <th>
                 <%= t('headers.variable_example_value', "Example Value") %>
-                <div><button type="button" class="recompute_variables"><%= t('buttons.recompute', "Recompute") %></button></div>
+                <div><button type="button" class="btn btn-small recompute_variables"><%= t('buttons.recompute', "Recompute") %></button></div>
               </th>
             </tr>
           </thead>
@@ -141,8 +145,8 @@
       </div>
       <div class="equation_content variables_specified formulas_specified">
         <%= t(:offer_combinations, "Offer %{how_many} possible value combinations (max %{max_combinations})", :how_many => raw('<input type="text" class="combination_count combinations_option" style="width: 30px;"/>'), :max_combinations => max_combinations) %><br/>
-        <%= t(:allow_tolerance, "allow an error margin of +/- %{tolerance}", :tolerance => raw('<input type="text" class="combination_answer_tolerance float_value" style="width: 30px;" value="0"/>')) %>
-        <button type="button" class="compute_combinations combinations_option"><%= t('buttons.generate', "Generate") %></button>
+        <%= t(:allow_tolerance, "allow an error margin of +/- %{tolerance}", :tolerance => raw('<input type="text" placeholder="2.0 or 10%" class="combination_answer_tolerance" style="width: 30px;" value="0"/>')) %>
+        <button type="button" class="btn compute_combinations combinations_option"><%= t('buttons.generate', "Generate") %></button>
       </div>
       <div class="formulas_specified combinations_holder">
         <table class="combinations">
@@ -161,9 +165,9 @@
     </div>
     <div class="matching_answer_incorrect_matches_holder" style="margin-top: 15px;">
       <b id="distractor_label"><%= before_label(:distractors, "Additional Match Possibilities (distractors)") %></b>
-      <div style="font-size: 0.8em;"><%= t(:distractor_instructions, "type each distractor on its own line") %></div>
+      <div id="distractor_instructions" style="font-size: 0.8em;"><%= t(:distractor_instructions, "type each distractor on its own line") %></div>
       <div style="text-align: center;">
-      <textarea style="width: 90%; height: 50px;" aria-labelledby="distractor_label" name="matching_answer_incorrect_matches"></textarea>
+      <textarea style="width: 90%; height: 50px;" aria-labelledby="distractor_label" aria-describedby="distractor_instructions" name="matching_answer_incorrect_matches"></textarea>
       </div>
     </div>
     <div class="missing_word_after_answer" style="margin-top: 15px;">

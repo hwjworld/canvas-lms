@@ -28,7 +28,7 @@ class AccountUser < ActiveRecord::Base
   after_destroy :update_account_associations_later
   attr_accessible :account, :user, :membership_type
 
-  validates_presence_of :account_id, :user_id
+  validates_presence_of :account_id, :user_id, :membership_type
 
   alias_method :context, :account
 
@@ -148,7 +148,5 @@ class AccountUser < ActiveRecord::Base
     account_ids_for_user(user).include?(account_id)
   end
   
-  named_scope :for_user, lambda{|user|
-    {:conditions => ['account_users.user_id = ?', user.id] }
-  }
+  scope :for_user, lambda { |user| where(:user_id => user) }
 end

@@ -4,8 +4,11 @@ $canvas_tasks_loaded = true
 
 def check_syntax(files)
   quick = ENV["quick"] && ENV["quick"] == "true"
-
+  puts "--> Checking Syntax...."
   show_stoppers = []
+  raise "jsl needs to be in your $PATH, download from: javascriptlint.com" if `which jsl`.empty?
+  puts "--> Found jsl..."
+
   Array(files).each do |js_file|
     js_file.strip!
     # only lint things in public/javascripts that are not in /vendor, /compiled, etc.
@@ -34,7 +37,6 @@ def check_syntax(files)
         end
       end
 
-      raise "jsl needs to be in your $PATH, download from: javascriptlint.com" if `which jsl`.empty?
       jsl_output = `jsl -process "#{file_path}" -nologo -conf "#{File.join(Rails.root, 'config', 'jslint.conf')}"`
       exit_status = $?.exitstatus
       if exit_status != 0
@@ -50,7 +52,11 @@ def check_syntax(files)
       end
     end
   end
-  raise "Fatal JavaScript errors found" unless show_stoppers.empty?
+  if show_stoppers.empty?
+    puts " --> No JavaScript errors found using jsl"
+  else
+    raise "FATAL JavaScript errors found using jsl"
+  end
 end
 
 
@@ -99,6 +105,7 @@ namespace :canvas do
 
     puts "--> Compiling static assets [css]"
     Rake::Task['css:generate'].invoke
+    Rake::Task['css:styleguide'].invoke
 
     puts "--> Compiling static assets [jammit]"
     output = `bundle exec jammit 2>&1`
@@ -146,6 +153,20 @@ namespace :canvas do
    end
 end
 
+namespace :lint do
+  desc "lint controllers for bad render json calls."
+  task :render_json do
+    output = `script/render_json_lint`
+    exit_status = $?.exitstatus
+    puts output
+    if exit_status != 0
+      raise "lint:render_json test failed"
+    else
+      puts "lint:render_json test succeeded"
+    end
+  end
+end
+
 namespace :db do
   desc "Shows pending db migrations."
   task :pending_migrations => :environment do
@@ -156,6 +177,18 @@ namespace :db do
       puts '  %4d %s%s' % [pending_migration.version, pending_migration.name, tags]
     end
   end
+
+   desc "execute migration_lint script."
+   task :migration_lint do
+     output = `script/migration_lint`
+     exit_status = $?.exitstatus
+     puts output
+     if exit_status != 0
+       raise "migration_lint test failed"
+     else
+       puts "migration_lint test succeeded"
+     end
+   end
 
   namespace :migrate do
     desc "Run all pending predeploy migrations"
@@ -179,7 +212,7 @@ namespace :db do
       drop_database(config) rescue nil
       Canvas::Cassandra::Database.config_names.each do |cass_config|
         db = Canvas::Cassandra::Database.from_config(cass_config)
-        db.keyspace_information.tables.each do |table|
+        db.tables.each do |table|
           db.execute("DROP TABLE #{table}")
         end
       end

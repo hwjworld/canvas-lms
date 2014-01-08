@@ -1,12 +1,4 @@
-ActionController::Base.param_parsers.delete(Mime::XML)
-# CVE-2013-0333
-# https://groups.google.com/d/topic/rubyonrails-security/1h2DR63ViGo/discussion
-# With Rails 2.3.16 we could remove this line, but we still prefer JSONGem for performance reasons
-ActiveSupport::JSON.backend = "JSONGem"
-
-if Rails::VERSION::MAJOR == 3 && Rails::VERSION::MINOR >= 1
-  raise "This patch has been merged into rails 3.1, remove it from our repo"
-else
+if CANVAS_RAILS2
   # bug submitted to rails: https://rails.lighthouseapp.com/projects/8994/tickets/5802-activerecordassociationsassociationcollectionload_target-doesnt-respect-protected-attributes#ticket-5802-1
   # This fix has been merged into rails trunk and will be in the rails 3.1 release.
   class ActiveRecord::Associations::AssociationCollection
@@ -96,7 +88,7 @@ else
 
   # Patch for CVE-2013-0155
   # https://groups.google.com/d/topic/rubyonrails-security/c7jT-EeN9eI/discussion
-  # The one changed line is flagged
+  # Also fixes problem with nested conditions containing ?
   class ActiveRecord::Base
     class << self
       def sanitize_sql_hash_for_conditions(attrs, default_table_name = quoted_table_name, top_level = true)
@@ -105,6 +97,7 @@ else
         # This is the one modified line
         raise(ActiveRecord::StatementInvalid, "non-top-level hash is empty") if !top_level && attrs.is_a?(Hash) && attrs.empty?
 
+        nested_conditions = []
         conditions = attrs.map do |attr, value|
           table_name = default_table_name
 
@@ -121,13 +114,15 @@ else
 
             attribute_condition("#{attr_table_name}.#{connection.quote_column_name(attr)}", value)
           elsif top_level
-            sanitize_sql_hash_for_conditions(value, connection.quote_table_name(attr.to_s), false)
+            nested_conditions << sanitize_sql_hash_for_conditions(value, connection.quote_table_name(attr.to_s), false)
+            nil
           else
             raise ActiveRecord::StatementInvalid
           end
-        end.join(' AND ')
+        end.compact.join(' AND ').presence
 
-        replace_bind_variables(conditions, expand_range_bind_variables(attrs.values))
+        conditions = replace_bind_variables(conditions, expand_range_bind_variables(attrs.values)) if conditions
+        [conditions, *nested_conditions].compact.join(' AND ')
       end
       alias_method :sanitize_sql_hash, :sanitize_sql_hash_for_conditions
     end
@@ -172,42 +167,54 @@ else
     end
   end
 
-  # Handle quoting properly for Infinity and NaN. This fix exists in Rails 3.1
-  # and can be safely removed once we upgrade.
-  #
-  # Adapted from: https://github.com/rails/rails/commit/06c23c4c7ff842f7c6237f3ac43fc9d19509a947
-  #
-  # This patch is covered by tests in spec/initializers/active_record_quoting_spec.rb
   if defined?(ActiveRecord::ConnectionAdapters::PostgreSQLAdapter)
     ActiveRecord::ConnectionAdapters::PostgreSQLAdapter.class_eval do
-      # Quotes PostgreSQL-specific data types for SQL input.
-      def quote(value, column = nil) #:nodoc:
-        if value.kind_of?(String) && column && column.type == :binary
-          "'#{escape_bytea(value)}'"
-        elsif value.kind_of?(String) && column && column.sql_type == 'xml'
-          "xml '#{quote_string(value)}'"
-        elsif value.kind_of?(Float)
+      # Force things with (approximate) integer representations (Floats,
+      # BigDecimals, Times, etc.) into those representations. Raise
+      # ActiveRecord::StatementInvalid for any other non-integer things.
+      def quote_with_integer_enforcement(value, column = nil)
+        if column && column.type == :integer && !value.respond_to?(:quoted_id)
+          case value
+          when String, ActiveSupport::Multibyte::Chars, nil, true, false
+            # these already have branches for column.type == :integer (or don't
+            # need one)
+            quote_without_integer_enforcement(value, column)
+          else
+            if value.respond_to?(:to_i)
+              # quote the value in its integer representation
+              value.to_i.to_s
+            else
+              # doesn't have a (known) integer representation, can't quote it
+              # for an integer column
+              raise ActiveRecord::StatementInvalid, "#{value.inspect} cannot be interpreted as an integer"
+            end
+          end
+        else
+          quote_without_integer_enforcement(value, column)
+        end
+      end
+      alias_method_chain :quote, :integer_enforcement
+
+      # Handle quoting properly for Infinity and NaN. This fix exists in Rails 3.1
+      # and can be safely removed once we upgrade.
+      #
+      # Adapted from: https://github.com/rails/rails/commit/06c23c4c7ff842f7c6237f3ac43fc9d19509a947
+      #
+      # This patch is covered by tests in spec/initializers/active_record_quoting_spec.rb
+      def quote_with_infinity_and_nan(value, column = nil) #:nodoc:
+        if value.kind_of?(Float)
           if value.infinite? && column && column.type == :datetime
             "'#{value.to_s.downcase}'"
           elsif value.infinite? || value.nan?
             "'#{value.to_s}'"
           else
-            super
-          end
-        elsif value.kind_of?(Numeric) && column && column.sql_type == 'money'
-          # Not truly string input, so doesn't require (or allow) escape string syntax.
-          "'#{value.to_s}'"
-        elsif value.kind_of?(String) && column && column.sql_type =~ /^bit/
-          case value
-            when /^[01]*$/
-              "B'#{value}'" # Bit-string notation
-            when /^[0-9A-F]*$/i
-              "X'#{value}'" # Hexadecimal notation
+            quote_without_infinity_and_nan(value, column)
           end
         else
-          super
+          quote_without_infinity_and_nan(value, column)
         end
       end
+      alias_method_chain :quote, :infinity_and_nan
     end
   end
 

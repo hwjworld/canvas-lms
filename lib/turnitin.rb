@@ -19,9 +19,10 @@
 module Turnitin
   class Client
     
-    attr_accessor :endpoint, :account_id, :shared_secret, :testing
-    def initialize(account_id, shared_secret, testing=false)
-      @host = "api.turnitin.com"
+    attr_accessor :endpoint, :account_id, :shared_secret, :host, :testing
+
+    def initialize(account_id, shared_secret, host=nil, testing=false)
+      @host = host || "api.turnitin.com"
       @endpoint = "/api.asp"
       raise "Account ID required" unless account_id
       raise "Shared secret required" unless shared_secret
@@ -66,14 +67,11 @@ module Turnitin
         null_email
       end
     end
+
+    TurnitinUser = Struct.new(:asset_string,:first_name,:last_name,:name)
     
     def testSettings
-      user = OpenObject.new({
-        :asset_string => "admin_test",
-        :first_name => "Admin",
-        :last_name => "Test",
-        :name => "Admin Test"
-      })
+      user = TurnitinUser.new("admin_test","Admin","Test","Admin Test")
       res = createTeacher(user)
       !!res
     end

@@ -33,14 +33,15 @@ class InboxItem < ActiveRecord::Base
   after_save        :update_user_inbox_items_count
 
   # Validations
+  validates_presence_of :user_id, :sender_id, :asset_id, :asset_type, :workflow_state
   validates_length_of :subject, :maximum => 255
 
   # Access control
   attr_accessible :user_id, :asset, :subject, :body_teaser, :sender_id
 
   # Named scopes
-  named_scope :active, :conditions => "workflow_state NOT IN ('deleted', 'retired', 'retired_unread')"
-  named_scope :unread, :conditions => {:workflow_state => 'unread'}
+  scope :active, where("workflow_state NOT IN ('deleted', 'retired', 'retired_unread')")
+  scope :unread, where(:workflow_state => 'unread')
 
   # State machine
   workflow do
@@ -95,8 +96,7 @@ class InboxItem < ActiveRecord::Base
 
   def update_user_inbox_items_count
     new_unread_count = user.inbox_items.unread.count rescue 0
-    User.update_all({ :unread_inbox_items_count => new_unread_count },
-      { :id => user_id })
+    User.where(:id => user_id).update_all(:unread_inbox_items_count => new_unread_count)
   end
 
   def context_type_plural

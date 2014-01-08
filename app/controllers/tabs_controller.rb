@@ -30,12 +30,13 @@ class TabsController < ApplicationController
 
   before_filter :require_context
 
-  # @API List available for a course or group
+  # @API List available tabs for a course or group
   #
   # Returns a list of navigation tabs available in the current context.
   #
-  # @argument include[] ["external"] Optionally include external tool tabs in the returned list of tabs
-  # (Only has effect for courses, not groups)
+  # @argument include[] [String, "external"]
+  #   Optionally include external tool tabs in the returned list of tabs
+  #   (Only has effect for courses, not groups)
   #
   # @example_request
   #     curl -H 'Authorization: Bearer <token>' \ 
@@ -67,20 +68,22 @@ class TabsController < ApplicationController
   #       }
   #     ]
   def index
-    includes = Array(params[:include])
-    tabs = @context.tabs_available(@current_user, :include_external => includes.include?('external'))
-    tabs = tabs.select do |tab|
-      if (tab[:id] == @context.class::TAB_CHAT rescue false)
-        tab[:href] && tab[:label] && feature_enabled?(:tinychat)
-      elsif (tab[:id] == @context.class::TAB_COLLABORATIONS rescue false)
-        tab[:href] && tab[:label] && Collaboration.any_collaborations_configured?
-      elsif (tab[:id] == @context.class::TAB_CONFERENCES rescue false)
-        tab[:href] && tab[:label] && feature_enabled?(:web_conferences)
-      else
-        tab[:href] && tab[:label]
+    if authorized_action(@context, @current_user, :read)
+      includes = Array(params[:include])
+      tabs = @context.tabs_available(@current_user, :include_external => includes.include?('external'))
+      tabs = tabs.select do |tab|
+        if (tab[:id] == @context.class::TAB_CHAT rescue false)
+          tab[:href] && tab[:label] && feature_enabled?(:tinychat)
+        elsif (tab[:id] == @context.class::TAB_COLLABORATIONS rescue false)
+          tab[:href] && tab[:label] && Collaboration.any_collaborations_configured?
+        elsif (tab[:id] == @context.class::TAB_CONFERENCES rescue false)
+          tab[:href] && tab[:label] && feature_enabled?(:web_conferences)
+        else
+          tab[:href] && tab[:label]
+        end
       end
+      render :json => tabs_available_json(tabs, @current_user, session)
     end
-    render :json => tabs_available_json(tabs, @current_user, session)
   end
 
 end

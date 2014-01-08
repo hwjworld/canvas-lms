@@ -2,7 +2,8 @@ define [
   'use!vendor/backbone'
   'underscore'
   'str/htmlEscape'
-], (Backbone, _, htmlEscape) ->
+  'compiled/util/mixin'
+], (Backbone, _, htmlEscape, mixin) ->
 
   ##
   # Extends Backbone.View on top of itself to be 100X more useful
@@ -87,13 +88,26 @@ define [
     # @api public
 
     initialize: (options) ->
-      @options = _.extend {}, @defaults, @options, options
+      @options = _.extend {}, @defaults, options
       @setOptionProperties()
+      @storeChildrenViews()
       @$el.data 'view', this
-      @model.view = this if @model
-      @collection.view = this if @collection
+      @_setViewProperties()
+      # magic from mixin
+      fn.call this for fn in @__initialize__ if @__initialize__
+      @attach()
       this
 
+    # Store all children views for easy access. 
+    #   ie: 
+    #      @view.children # {@view1, @view2}
+    #
+    # @api private
+    
+    storeChildrenViews: ->
+      return unless @constructor.__childViews__
+      @children = _.map @constructor.__childViews__, (viewObj) => @[viewObj.name]
+    
     ##
     # Sets the option properties
     #
@@ -101,7 +115,8 @@ define [
 
     setOptionProperties: ->
       for property in @constructor.__optionProperties__
-        @[property] = @options[property] if @options[property]?
+        @[property] = @options[property] if @options[property] isnt undefined
+
 
     ##
     # Renders the view, calls render hooks
@@ -137,12 +152,12 @@ define [
     _afterRender: ->
       @cacheEls()
       @createBindings()
-      @afterRender()
       # TODO: remove this when `options.views` is removed
       @renderViews() if @options.views
-      # renderChildViews must come last! so we don't cache all the
+      # renderChildViews must come after cacheEls so we don't cache all the
       # child views elements, bind them to model data, etc.
       @renderChildViews()
+      @afterRender()
 
     ##
     # Define in subclasses to add behavior to your view, ie. creating
@@ -158,6 +173,23 @@ define [
     # @api private
 
     afterRender: ->
+      # magic from `mixin`
+      fn.call this for fn in @__afterRender__ if @__afterRender__
+
+    ##
+    # Define in subclasses to attach your collection/model events
+    #
+    # Example:
+    #
+    #   class SomeView extends Backbone.View
+    #     attach: ->
+    #       @model.on 'change', @render
+    #
+    # @api public
+
+    attach: ->
+      # magic from `mixin`
+      fn.call this for fn in @__attach__ if @__attach__
 
     ##
     # Defines the locals for the template with intelligent defaults.
@@ -197,6 +229,8 @@ define [
     renderChildViews: ->
       return unless @constructor.__childViews__
       for {name, selector} in @constructor.__childViews__
+        console?.warn?("I need a child view '#{name}' but one was not provided") unless @[name]?
+        continue unless @[name] # don't blow up if the view isn't present (or it's explicitly set to false)
         target = @$ selector
         @[name].setElement target
         @[name].render()
@@ -256,13 +290,7 @@ define [
     # @api public
 
     @mixin: (mixins...) ->
-      for mixin in mixins
-        for key, prop of mixin
-          # don't blow away old events, merge them
-          if key is 'events'
-            _.extend @::[key], prop
-          else
-            @::[key] = prop
+      mixin this, mixins...
 
     ##
     # DEPRECATED - don't use views option, use `child` constructor method
@@ -278,6 +306,25 @@ define [
       view.setElement target
       view.render()
       @[selector] ?= view
+
+    hide: -> @$el.hide()
+    show: -> @$el.show()
+    toggle: -> @$el.toggle()
+
+    # Set view property for attached model/collection objects. If
+    # @setViewProperties is set to false, view properties will
+    # not be set.
+    #
+    # Example:
+    #   class SampleView extends Backbone.View
+    #     setViewProperties: false
+    #
+    # @api private
+    _setViewProperties: ->
+      return if @setViewProperties == false
+      @model.view = this if @model
+      @collection.view = this if @collection
+      return
 
   Backbone.View
 

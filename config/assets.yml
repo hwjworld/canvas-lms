@@ -1,7 +1,6 @@
 embed_assets: off
 gzip_assets: off
-css_compressor_options:
-  line_break: 0
+css_compressor: 'sass'
 
 # if you want use IE in dev mode and want to get around the max of 30 stylesheets
 # problem, uncomment the following lines and make sure you
@@ -16,13 +15,19 @@ css_compressor_options:
 javascripts:
 
 stylesheets:
+  course_show: 
+    - public/stylesheets/compiled/course_show.css
+  content_migrations: 
+    - public/stylesheets/compiled/content_migrations.css
+  vendor:
+    - public/stylesheets/compiled/g_vendor.css
   common:
     - public/stylesheets/compiled/g_base.css
     - public/stylesheets/static/mediaelementplayer.css
     - public/stylesheets/compiled/g_instructure.css
     - public/stylesheets/compiled/g_assignments.css
     - public/stylesheets/compiled/g_context_inbox.css
-    - public/stylesheets/compiled/g_groups.css
+    - public/stylesheets/compiled/g_groups.css # TODO: remove me when new manage_groups lands
     - public/stylesheets/compiled/g_media_comments.css
     - public/stylesheets/compiled/g_context_modules.css
     - public/stylesheets/compiled/g_collaborations.css
@@ -37,6 +42,10 @@ stylesheets:
     - public/stylesheets/compiled/print.css
   context_modules: 
     - public/stylesheets/compiled/context_modules.css
+  context_modules2: 
+    - public/stylesheets/compiled/context_modules2.css
+  context_module_progressions:
+      - public/stylesheets/compiled/context_module_progressions.css
   dashboard:
     - public/stylesheets/compiled/dashboard_messages.css
     - public/stylesheets/compiled/dashboard_activity.css
@@ -53,6 +62,8 @@ stylesheets:
   speed_grader:
     - public/stylesheets/compiled/ui.selectmenu.css
     - public/stylesheets/compiled/speed_grader.css
+  conferences:
+    - public/stylesheets/compiled/conferences.css
   plugins:
     - public/stylesheets/compiled/plugins.css
   gradebook_uploads:
@@ -65,6 +76,9 @@ stylesheets:
     - public/stylesheets/compiled/mini_calendar.css
     - public/stylesheets/compiled/calendar/sidebar.css
     - public/stylesheets/compiled/calendar/scheduler.css
+    - public/stylesheets/compiled/calendar/calendarHeader.css
+  agenda_view:
+    - public/stylesheets/compiled/agenda_view.css
   course_settings:
     - public/stylesheets/compiled/course_settings.css
     - public/stylesheets/compiled/external_tools.css
@@ -90,20 +104,26 @@ stylesheets:
     - public/stylesheets/compiled/attendance.css
   quizzes:
     - public/stylesheets/compiled/quizzes.css
+    - public/stylesheets/compiled/quizzes-mobile.css
     - public/stylesheets/compiled/message_students.css
     - public/stylesheets/compiled/ui.selectmenu.css
+  quizzes_ember:
+    - public/stylesheets/compiled/quizzes_ember.css
   moderate_quiz:
     - public/stylesheets/compiled/moderate_quiz.css
   assignments:
     - public/stylesheets/compiled/assignments.css
     - public/stylesheets/compiled/grading_standards.css
     - public/stylesheets/static/embed_content.css
+  new_assignments:
+    - public/stylesheets/compiled/new_assignments.css
   grading_standards:
     - public/stylesheets/compiled/grading_standards.css
   login:
     - public/stylesheets/compiled/login.css
+  otp_login:
+    - public/stylesheets/compiled/otp_login.css
   roster:
-    - public/stylesheets/compiled/course_settings.css
     - public/stylesheets/compiled/roster.css
   roster_user:
     - public/stylesheets/compiled/roster_user.css
@@ -132,11 +152,17 @@ stylesheets:
   account_settings:
     - public/stylesheets/compiled/account_settings.css
     - public/stylesheets/compiled/external_tools.css
+  account_admin_tools:
+    - public/stylesheets/compiled/account_admin_tools.css
   select_content_dialog:
     - public/stylesheets/compiled/select_content_dialog.css
   conversations:
     - public/stylesheets/compiled/conversations.css
     - public/stylesheets/compiled/slideshow.css
+  conversations_new:
+    - public/javascripts/vendor/bootstrap-select/bootstrap-select.css
+    - public/stylesheets/compiled/conversations_new.css
+    - public/stylesheets/compiled/compose_message_dialog.css
   alerts:
     - public/stylesheets/compiled/alerts.css
   developer_keys:
@@ -155,4 +181,14 @@ stylesheets:
     - public/stylesheets/compiled/content_imports.css
   user_notes:
     - public/stylesheets/compiled/user_notes.css
+  imports:
+    - public/stylesheets/compiled/imports.css
+  styleguide:
+    - public/stylesheets/compiled/styleguide.css
+    - public/stylesheets/compiled/syntax.css
+  locale:
+    - public/stylesheets/compiled/locale.css
+  mobile_auth:
+    - public/stylesheets/compiled/mobile_auth.css
+
   <%= plugin_assets.anchors_yml %>

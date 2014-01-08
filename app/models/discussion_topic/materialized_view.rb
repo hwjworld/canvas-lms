@@ -21,7 +21,11 @@
 class DiscussionTopic::MaterializedView < ActiveRecord::Base
   include Api::V1::DiscussionTopics
   include Api
-  include ActionController::UrlWriter
+  if CANVAS_RAILS2
+    include ActionController::UrlWriter
+  else
+    include Rails.application.routes.url_helpers
+  end
 
   attr_accessible :discussion_topic
 
@@ -68,7 +72,7 @@ class DiscussionTopic::MaterializedView < ActiveRecord::Base
       entry_ids = self.entry_ids_array
 
       if opts[:include_new_entries]
-        new_entries = discussion_topic.discussion_entries.all(:conditions => ["updated_at >= ?", (self.generation_started_at || self.updated_at)])
+        new_entries = discussion_topic.discussion_entries.where("updated_at >= ?", (self.generation_started_at || self.updated_at)).all
         participant_ids = (Set.new(participant_ids) + new_entries.map(&:user_id).compact + new_entries.map(&:editor_id).compact).to_a
         entry_ids = (Set.new(entry_ids) + new_entries.map(&:id)).to_a
         new_entries_json_structure = discussion_entry_api_json(new_entries, discussion_topic.context, nil, nil, []).to_json
@@ -92,23 +96,26 @@ class DiscussionTopic::MaterializedView < ActiveRecord::Base
   end
 
   handle_asynchronously :update_materialized_view,
-    :singleton => proc { |o| "materialized_discussion:#{ Shard.default.activate { o.discussion_topic_id } }" }
+    :singleton => proc { |o| "materialized_discussion:#{ Shard.birth.activate { o.discussion_topic_id } }" },
+    :run_at => proc { 10.seconds.from_now } # delay for replication to slave
 
   def build_materialized_view
     entry_lookup = {}
     view = []
     user_ids = Set.new
-    discussion_entries = self.discussion_topic.discussion_entries
-    discussion_entries.find_each do |entry|
-      json = discussion_entry_api_json([entry], discussion_topic.context, nil, nil, []).first
-      entry_lookup[entry.id] = json
-      user_ids << entry.user_id
-      user_ids << entry.editor_id if entry.editor_id
-      if parent = entry_lookup[entry.parent_id]
-        parent['replies'] ||= []
-        parent['replies'] << json
-      else
-        view << json
+    Shackles.activate(:slave) do
+      discussion_entries = self.discussion_topic.discussion_entries
+      discussion_entries.find_each do |entry|
+        json = discussion_entry_api_json([entry], discussion_topic.context, nil, nil, []).first
+        entry_lookup[entry.id] = json
+        user_ids << entry.user_id
+        user_ids << entry.editor_id if entry.editor_id
+        if parent = entry_lookup[entry.parent_id]
+          parent['replies'] ||= []
+          parent['replies'] << json
+        else
+          view << json
+        end
       end
     end
     return view.to_json, user_ids.to_a, entry_lookup.keys

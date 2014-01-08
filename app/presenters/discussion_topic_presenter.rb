@@ -88,6 +88,10 @@ class DiscussionTopicPresenter
   #
   # Returns a boolean.
   def allows_speed_grader?
-    !large_roster?
+    !large_roster? && draft_state_allows_speedgrader?
+  end
+
+  def draft_state_allows_speedgrader?
+    topic.context.feature_enabled?(:draft_state) ? topic.assignment.published? : true
   end
 end

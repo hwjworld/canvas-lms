@@ -49,6 +49,7 @@ define [
       40: 'DownArrow'
 
     initialize: (opts) ->
+      super
       @readOnly = opts.readOnly
       @dir = opts.dir
       @attachEvents()
@@ -151,6 +152,8 @@ define [
           model: $target.data('view').model
           parent: $target.parent().data('view')
         $sidebar.data('drag', dragObject)
+        $target.blur()
+        $target.focus()
 
     # Internal: Cancel a drag and drop action.
     #

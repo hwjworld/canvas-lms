@@ -22,7 +22,7 @@
 
   <% if can_do(@context, @current_user, :change_course_state) %>
     <% if @context.completed? %>
-      <% form_tag context_url(@context, :context_unconclude_url) do %>
+      <%= form_tag context_url(@context, :context_unconclude_url) do %>
         <button class="btn button-sidebar-wide" type="submit">
           <i class="icon-add"></i>
           <%= t('buttons.unconclude', 'Un-Conclude Course') %>
@@ -51,7 +51,7 @@
   <% end %>
 
   <% if can_do(@context, @current_user, :manage_content, :manage_files, :manage_quizzes) %>
-    <% link_to context_url(@context, :context_imports_url), :class => 'btn button-sidebar-wide import_content' do %>
+    <% link_to context_url(@context, :context_content_migrations_url), :class => 'btn button-sidebar-wide import_content' do %>
       <i class="icon-download"></i>
       <%= t('links.import', 'Import Content into this Course') %>
     <% end %>
@@ -73,12 +73,12 @@
     <div <%= hidden(true) %> id="reset_course_content_dialog">
       <p><%= mt('help.reset_course_content', 'Resetting course content will permanently delete all associated assignments, discussions, quizzes, modules, rubrics, pages, files, learning outcomes, question banks, collaborations, conferences, or any other content. This action is irreversible, and the data *cannot* be recovered. Are you sure you wish to continue?') %></p>
 
-      <% form_for @context, :url => context_url(@context, :course_reset_url), :html => { :method => :post } do %>
+      <%= form_for @context, :url => context_url(@context, :course_reset_url), :html => { :method => :post } do %>
         <div class="button-container">
           <button type="button" class="btn cancel_button">
             <%= t('#buttons.cancel', 'Cancel') %>
           </button>
-          <button type="submit" class="btn btn-primary submit_button">
+          <button type="submit" class="btn btn-danger submit_button">
             <%= t('buttons.reset', 'Reset Course Content') %>
           </button>
         </div>
@@ -87,13 +87,9 @@
   <% end %>
 
   <table class="summary">
-    <thead>
-      <tr>
-        <th colspan="2">
-          <%= t('headings.current_users', 'Current Users') %>
-        </th>
-      </tr>
-    </thead>
+    <caption>
+      <h3><%= t('headings.current_users', 'Current Users') %></h3>
+    </caption>
 
     <tbody>
       <% @all_roles.each do |base_role| %>

@@ -47,7 +47,7 @@ describe StreamItem do
     it "should have a default ttl" do
       si1 = StreamItem.create! { |si| si.asset_type = 'Message'; si.data = {} }
       si2 = StreamItem.create! { |si| si.asset_type = 'Message'; si.data = {} }
-      StreamItem.update_all({:updated_at => 1.year.ago}, {:id => si2.id})
+      StreamItem.where(:id => si2).update_all(:updated_at => 1.year.ago)
       expect {
         StreamItem.destroy_stream_items_using_setting
       }.to change(StreamItem, :count).by(-1)
@@ -55,7 +55,7 @@ describe StreamItem do
   end
 
   context "across shards" do
-    it_should_behave_like "sharding"
+    specs_require_sharding
 
     it "should create stream items on the user's shard" do
       group_with_user
@@ -101,6 +101,29 @@ describe StreamItem do
       @user2.recent_stream_items(:context => @course).map(&:data).should == [@dt]
       @shard1.activate do
         @user2.recent_stream_items(:context => @course2).map(&:data).should == [@dt2]
+      end
+    end
+
+    it "should always cache stream items on the user's shard" do
+      course_with_teacher(:active_all => 1)
+      @user2 = @shard1.activate { user_model }
+      @course.enroll_student(@user2).accept!
+
+      dt = @course.discussion_topics.create!(:title => 'title')
+      enable_cache do
+        items = @user2.cached_recent_stream_items
+        items2 = @shard1.activate { @user2.cached_recent_stream_items }
+        items.should == [dt.stream_item]
+        items.should === items2 # same object, because same cache key
+
+        item = @user2.visible_stream_item_instances.last
+        item.update_attribute(:hidden, true)
+
+        # after dismissing an item, the old items should no longer be cached
+        items = @user2.cached_recent_stream_items
+        items2 = @shard1.activate { @user2.cached_recent_stream_items }
+        items.should be_empty
+        items2.should be_empty
       end
     end
   end

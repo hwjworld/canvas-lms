@@ -1,13 +1,13 @@
 <% course_home ||= false %>
-<% js_bundle :context_modules %>
-<% jammit_css :context_modules %>
 <% js_env :COLLAPSED_MODULES => @collapsed_modules %>
 <% js_env :CAN_MANAGE_MODULES  => can_do(@context, @current_user, :manage_grades) || can_do(@context, @current_user, :manage_content) %>
 <% js_env :COURSE_ID => @context.id %>
 <% js_env :NO_MODULE_PROGRESSIONS => @context.large_roster %>
+<% js_bundle :context_modules %>
+<% jammit_css :context_modules %>
 
 <% if course_home %>
-  <h2><%= @context.name %></h2>
+  <div class="h2"><%= @context.name %></div>
 <% end %>
 
 <div class="context-modules-main-header clearfix">
@@ -37,21 +37,37 @@ TEXT
     <p><%= t('help.no_modules', %{No modules have been defined for this course.}) %></p>
   <% end %>
 </div>
+<div class="hidden-readable" tabindex="0" aria-label="keyboard instructions">
+  <%= t('modules_keyboard_hint',
+        'To change the order of the course modules and module items,
+        first turn the cursor off on your screen reader. Insert-z in JAWS.
+        Press tab to select the first module.
+        Press up and down to choose a module or module item.
+        Press space to select the module or module item to start dragging.
+        Then press up and down to select a destination.
+        Then press space a second time to drop selection after destination.') %>
+</div>
+
+<% keyboard_navigation([
+   {:key => t('keycodes.next_module_item', 'Up'), :description => t('keycode_descriptions.next_module_item', 'Select next module or module item')},
+   {:key => t('keycodes.previous_module_item', 'Down'), :description => t('keycode_descriptions.previous_module_item', 'Select previous module or module item')},
+   {:key => t('keycodes.toggle_module_dragging', 'Space'), :description => t('keycode_descriptions.toggle_module_dragging', 'Select item to begin dragging, or drop previously selected item')}
+]) %>
 <div id="context_modules_sortable_container">
-  <div id="context_modules" class="<%= 'editable' if can_do(@context, @current_user, :manage_content) %>">
+  <div id="context_modules" tabindex="0" aria-label="<%= t('headings.course_modules', %{Course Modules}) %>" class="<%= 'editable' if can_do(@context, @current_user, :manage_content) %>">
     <% editable = can_do(@context, @current_user, :manage_grades) || can_do(@context, @current_user, :manage_content) %>
     <% cache([@context.cache_key, editable, 'all_context_modules', collection_cache_key(@modules)].join('/')) do %>
-      <% ContextModule.send(:preload_associations, @modules, [:context_module_progressions, {:content_tags => :content}]) %>
+      <% ContextModule.send(:preload_associations, @modules, :content_tags => :content) %>
       <% @modules.each do |m| %>
         <%= render :partial => 'context_modules/context_module', :object => m, :locals => {:editable => editable } %>
       <% end %>
     <% end %>
-  </div>  
+  </div>
 </div>
 <%= render :partial => 'context_modules/context_module', :object => nil %>
 <%= render :partial => 'context_modules/module_item', :object => nil %>
 <% if can_do(@context, @current_user, :manage_content) %>
-  <% form_for :context_module, :url => context_url(@context, :context_context_modules_url), :html => {:id => "add_context_module_form", :style => "display: none;"} do |f| %>
+  <%= form_for :context_module, :url => context_url(@context, :context_context_modules_url), :html => {:id => "add_context_module_form", :style => "display: none;"} do |f| %>
     <table class="formtable">
       <tr>
         <td colspan="2">
@@ -107,7 +123,16 @@ TEXT
           </div>
         </div>
       </td>
-    </tr><tr>
+    </tr>
+    <% if Canvas::Plugin.find!('grade_export').enabled? %>
+      <tr>
+        <td colspan="2">
+          <%= f.check_box :publish_final_grade, :id => "publish_final_grade" %>
+          <%= f.label :publish_final_grade, :en => "publish final grade for the student when this module is completed", :for => "publish_final_grade" %>
+        </td>
+      </tr>
+    <% end %>
+    <tr>
         <td colspan="2">
           <%= f.check_box :require_sequential_progress, :id => "require_sequential_progress" %>
           <%= f.label :require_sequential_progress, :en => "students must move through requirements in this module in sequential order", :for => "require_sequential_progress" %>
@@ -137,7 +162,7 @@ TEXT
   </div>
   <%= render :partial => "shared/select_content_dialog", :locals => {:for_modules => true} %>
   <div id="edit_item_dialog" style="display: none;">
-    <% form_for :content_tag, :url => "", :html => {:id => "edit_item_form", :method => :put, :style => "margin: 20px 10px;"} do |f| %>
+    <%= form_for :content_tag, :url => "", :html => {:id => "edit_item_form", :method => :put, :style => "margin: 20px 10px;"} do |f| %>
       <table class="formtable">
         <tr>
           <td><%= f.blabel :title, :en => "Title" %></td>
@@ -332,7 +357,7 @@ TEXT
 <div style="display: none;" id="progression_list">
   <a href="#" class="progression_list_url">&nbsp;</a>
   <% cache([@context, @current_user, 'students_visible_to_user'].cache_key, :no_locale => true) do %>
-    <% @context.students_visible_to(@current_user).scoped(:select => "id, name").order_by_sortable_name.each do |student| %>
+    <% @context.students_visible_to(@current_user).except(:select).select("users.id, users.name").order_by_sortable_name.each do |student| %>
       <div class="student student_<%= student.id %>">
         <div class="id"><%= student.id %></div>
         <div class="name"><%= student.last_name_first %></div>
@@ -388,3 +413,4 @@ TEXT
     </li>
   </ul>
 <% end %>
+

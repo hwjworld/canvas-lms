@@ -25,6 +25,10 @@ class Shard
     @default ||= Shard.new
   end
 
+  def self.birth
+    default
+  end
+
   def self.current
     default
   end
@@ -58,12 +62,16 @@ class Shard
     "default"
   end
 
-  def self.global_id_for(any_id)
+  def relative_id_for(any_id, target_shard = nil)
     any_id
   end
 
+  def self.global_id_for(any_id)
+    any_id.is_a?(ActiveRecord::Base) ? any_id.global_id : any_id
+  end
+
   def self.relative_id_for(any_id, target_shard = nil)
-    any_id
+    any_id.is_a?(ActiveRecord::Base) ? any_id.local_id : any_id
   end
 
   yaml_as "tag:instructure.com,2012:Shard"
@@ -82,11 +90,15 @@ class Shard
 end
 
 ActiveRecord::Base.class_eval do
-  class << self
-    VALID_FIND_OPTIONS << :shard
+  if CANVAS_RAILS2
+    class << self
+      VALID_FIND_OPTIONS << :shard
+    end
   end
 
-  def shard
+  scope :shard, lambda { |shard| scoped }
+
+  def shard(shard = nil)
     Shard.default
   end
 
@@ -105,12 +117,16 @@ ActiveRecord::Base.class_eval do
 end
 
 module ActiveRecord::Associations
+  (CANVAS_RAILS2 ? AssociationProxy : Association).class_eval do
+    def shard
+      Shard.default
+    end
+  end
+
   %w{HasManyAssociation HasManyThroughAssociation}.each do |klass|
     const_get(klass).class_eval do
-      def with_each_shard(*shards_or_options)
-        options = shards_or_options.pop if shards_or_options.last.is_a?(Hash)
+      def with_each_shard(*shards)
         scope = self
-        scope = self.scoped(options) if options
         scope = yield(scope) if block_given?
         Array(scope)
       end

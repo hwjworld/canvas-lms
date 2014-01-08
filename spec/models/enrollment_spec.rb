@@ -22,7 +22,7 @@ describe Enrollment do
   before(:each) do
     @user = User.create!
     @course = Course.create!
-    @enrollment = Enrollment.new(valid_enrollment_attributes)
+    @enrollment = StudentEnrollment.new(valid_enrollment_attributes)
   end
 
   it "should be valid" do
@@ -31,9 +31,7 @@ describe Enrollment do
 
   it "should have an interesting state machine" do
     enrollment_model
-    list = {}
-    list.stubs(:find_all_by_context_id_and_context_type).returns([])
-    @user.stubs(:dashboard_messages).returns(list)
+    @user.stubs(:dashboard_messages).returns(Message.none)
     @enrollment.state.should eql(:invited)
     @enrollment.accept
     @enrollment.state.should eql(:active)
@@ -48,13 +46,6 @@ describe Enrollment do
     enrollment_model
     @enrollment.accept
     @enrollment.state.should eql(:active)
-  end
-
-  it "should find students" do
-    @student_list = mock('student list')
-    @student_list.stubs(:map).returns(['student list'])
-    Enrollment.expects(:find).returns(@student_list)
-    Enrollment.students.should eql(['student list'])
   end
 
   it "should be pending if it is invited or creation_pending" do
@@ -197,47 +188,37 @@ describe Enrollment do
     it "should drop high scores for groups when specified" do
       @enrollment = @user.enrollments.first
       @group.update_attribute(:rules, "drop_highest:1")
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(nil)
       @submission = @assignment.grade_student(@user, :grade => "9")
       @submission[0].score.should eql(9.0)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(90.0)
       @submission2 = @assignment2.grade_student(@user, :grade => "20")
       @submission2[0].score.should eql(20.0)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(50.0)
       @group.update_attribute(:rules, nil)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(58.0)
     end
 
     it "should drop low scores for groups when specified" do
       @enrollment = @user.enrollments.first
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(nil)
       @submission = @assignment.grade_student(@user, :grade => "9")
       @submission2 = @assignment2.grade_student(@user, :grade => "20")
       @submission2[0].score.should eql(20.0)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(90.0)
       @group.update_attribute(:rules, "")
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(58.0)
     end
 
     it "should not drop the last score for a group, even if the settings say it should be dropped" do
       @enrollment = @user.enrollments.first
       @group.update_attribute(:rules, "drop_lowest:2")
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(nil)
       @submission = @assignment.grade_student(@user, :grade => "9")
       @submission[0].score.should eql(9.0)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(90.0)
       @submission2 = @assignment2.grade_student(@user, :grade => "20")
       @submission2[0].score.should eql(20.0)
-      run_transaction_commit_callbacks
       @enrollment.reload.computed_current_score.should eql(90.0)
     end
   end
@@ -292,8 +273,7 @@ describe Enrollment do
     it "should be able to read grades if the course grants management rights to the enrollment" do
       @new_user = user_model
       @enrollment.grants_rights?(@new_user, nil, :read_grades)[:read_grades].should be_false
-      @course.instructors << @new_user
-      @course.save!
+      @course.enroll_teacher(@new_user)
       @enrollment.grants_rights?(@user, nil, :read_grades).should be_true
     end
 
@@ -350,21 +330,21 @@ describe Enrollment do
         @enrollment.state.should eql(:invited)
         @enrollment.state_based_on_date.should eql(:invited)
         @enrollment.accept
-        @enrollment.state.should eql(:active)
+        @enrollment.reload.state.should eql(:active)
         @enrollment.state_based_on_date.should eql(:active)
 
         @enrollment.start_at = 4.days.ago
         @enrollment.end_at = 2.days.ago
         @enrollment.workflow_state = 'invited'
         @enrollment.save!
-        @enrollment.state.should eql(:invited)
+        @enrollment.reload.state.should eql(:invited)
         @enrollment.state_based_on_date.should eql(:completed)
         @enrollment.accept.should be_false
 
         @enrollment.start_at = 2.days.from_now
         @enrollment.end_at = 4.days.from_now
         @enrollment.save!
-        @enrollment.state.should eql(:invited)
+        @enrollment.reload.state.should eql(:invited)
         @enrollment.state_based_on_date.should eql(:invited)
         @enrollment.accept.should be_true
       end
@@ -381,7 +361,7 @@ describe Enrollment do
         @section.save!
         @enrollment.state.should eql(:invited)
         @enrollment.accept
-        @enrollment.state.should eql(:active)
+        @enrollment.reload.state.should eql(:active)
         @enrollment.state_based_on_date.should eql(:active)
 
         @section.start_at = 4.days.ago
@@ -389,7 +369,7 @@ describe Enrollment do
         @section.save!
         @enrollment.workflow_state = 'invited'
         @enrollment.save!
-        @enrollment.state.should eql(:invited)
+        @enrollment.reload.state.should eql(:invited)
         if should_be_invited
           @enrollment.state_based_on_date.should eql(:invited)
           @enrollment.accept.should be_true
@@ -402,6 +382,7 @@ describe Enrollment do
         @section.end_at = 4.days.from_now
         @section.save!
         @enrollment.save!
+        @enrollment.reload
         if should_be_invited
           @enrollment.state.should eql(:active)
           @enrollment.state_based_on_date.should eql(:active)
@@ -479,11 +460,11 @@ describe Enrollment do
         @enrollment.accept.should be_true
       end
 
-      def enrollment_dates_override_test(enrollment_type)
+      def enrollment_dates_override_test
         @term = @course.enrollment_term
         @term.should_not be_nil
         @term.save!
-        @override = @term.enrollment_dates_overrides.create!(:enrollment_type => enrollment_type, :enrollment_term => @term)
+        @override = @term.enrollment_dates_overrides.create!(:enrollment_type => @enrollment.type, :enrollment_term => @term)
         @override.start_at = 2.days.ago
         @override.end_at = 2.days.from_now
         @override.save!
@@ -521,7 +502,7 @@ describe Enrollment do
         @term.start_at = 2.days.from_now
         @term.end_at = 4.days.from_now
         @term.save!
-        @enrollment.reload.state_based_on_date.should eql(:inactive)
+        @enrollment.reload.state_based_on_date.should eql(@enrollment.admin? ? :active : :inactive)
       end
 
       context "as a student" do
@@ -546,7 +527,7 @@ describe Enrollment do
         end
 
         it "should accept into the right state based on availability dates on enrollment_dates_override" do
-          enrollment_dates_override_test('StudentEnrollment')
+          enrollment_dates_override_test
         end
 
         it "should have the correct state for a half-open past course" do
@@ -558,7 +539,7 @@ describe Enrollment do
 
           @enrollment.workflow_state = 'invited'
           @enrollment.save!
-          @enrollment.state.should == :invited
+          @enrollment.reload.state.should == :invited
           @enrollment.state_based_on_date.should == :completed
         end
       end
@@ -585,7 +566,7 @@ describe Enrollment do
         end
 
         it "should accept into the right state based on availability dates on enrollment_dates_override" do
-          enrollment_dates_override_test("TeacherEnrollment")
+          enrollment_dates_override_test
         end
       end
     end
@@ -613,14 +594,14 @@ describe Enrollment do
         @enrollment.start_at = 4.days.ago
         @enrollment.end_at = 2.days.ago
         @enrollment.save!
-        @enrollment.state.should eql(:active)
+        @enrollment.reload.state.should eql(:active)
         @enrollment.state_based_on_date.should eql(:completed)
 
         sleep 1
         @enrollment.start_at = 2.days.from_now
         @enrollment.end_at = 4.days.from_now
         @enrollment.save!
-        @enrollment.state.should eql(:active)
+        @enrollment.reload.state.should eql(:active)
         @enrollment.state_based_on_date.should eql(:inactive)
       end
 
@@ -809,16 +790,16 @@ describe Enrollment do
       @course.conclude_at = 4.days.from_now
       @course.save!
 
-      @teacher_enrollment.state_based_on_date.should == :active
-      @student_enrollment.state_based_on_date.should == :inactive
+      @teacher_enrollment.reload.state_based_on_date.should == :active
+      @student_enrollment.reload.state_based_on_date.should == :inactive
 
       # Term dates superset of course dates, now in ending non-overlap
       @course.start_at = 4.days.ago
       @course.conclude_at = 2.days.ago
       @course.save!
 
-      @teacher_enrollment.state_based_on_date.should == :active
-      @student_enrollment.state_based_on_date.should == :completed
+      @teacher_enrollment.reload.state_based_on_date.should == :active
+      @student_enrollment.reload.state_based_on_date.should == :completed
 
       # Course dates completely before term dates, now in term dates
       @course.start_at = 6.days.ago
@@ -828,32 +809,32 @@ describe Enrollment do
       @term.end_at = 2.days.from_now
       @term.save!
 
-      @teacher_enrollment.state_based_on_date.should == :active
-      @student_enrollment.state_based_on_date.should == :completed
+      @teacher_enrollment.reload.state_based_on_date.should == :active
+      @student_enrollment.reload.state_based_on_date.should == :completed
 
       # Course dates completely after term dates, now in term dates
       @course.start_at = 4.days.from_now
       @course.conclude_at = 6.days.from_now
       @course.save!
 
-      @teacher_enrollment.state_based_on_date.should == :active
-      @student_enrollment.state_based_on_date.should == :inactive
+      @teacher_enrollment.reload.state_based_on_date.should == :active
+      @student_enrollment.reload.state_based_on_date.should == :inactive
 
       # Now between course and term dates, term first
       @term.start_at = 4.days.ago
       @term.end_at = 2.days.ago
       @term.save!
 
-      @teacher_enrollment.state_based_on_date.should == :completed
-      @student_enrollment.state_based_on_date.should == :inactive
+      @teacher_enrollment.reload.state_based_on_date.should == :completed
+      @student_enrollment.reload.state_based_on_date.should == :inactive
 
       # Now after both dates
       @course.start_at = 4.days.ago
       @course.conclude_at = 2.days.ago
       @course.save!
 
-      @teacher_enrollment.state_based_on_date.should == :completed
-      @student_enrollment.state_based_on_date.should == :completed
+      @teacher_enrollment.reload.state_based_on_date.should == :completed
+      @student_enrollment.reload.state_based_on_date.should == :completed
 
       # Now before both dates
       @course.start_at = 2.days.from_now
@@ -863,16 +844,16 @@ describe Enrollment do
       @term.end_at = 4.days.from_now
       @term.save!
 
-      @teacher_enrollment.state_based_on_date.should == :inactive
-      @student_enrollment.state_based_on_date.should == :inactive
+      @teacher_enrollment.reload.state_based_on_date.should == :active
+      @student_enrollment.reload.state_based_on_date.should == :inactive
 
       # Now between course and term dates, course first
       @course.start_at = 4.days.ago
       @course.conclude_at = 2.days.ago
       @course.save!
 
-      @teacher_enrollment.state_based_on_date.should == :completed
-      @student_enrollment.state_based_on_date.should == :completed
+      @teacher_enrollment.reload.state_based_on_date.should == :completed
+      @student_enrollment.reload.state_based_on_date.should == :completed
 
     end
 
@@ -890,6 +871,7 @@ describe Enrollment do
       @enrollment.start_at = 4.days.ago
       @enrollment.end_at = 2.days.ago
       @enrollment.save!
+      @enrollment.reload
       @enrollment.active?.should be_false
       @enrollment.inactive?.should be_false
       @enrollment.completed?.should be_true
@@ -898,6 +880,7 @@ describe Enrollment do
       @enrollment.start_at = 2.days.from_now
       @enrollment.end_at = 4.days.from_now
       @enrollment.save!
+      @enrollment.reload
       @enrollment.active?.should be_false
       @enrollment.inactive?.should be_true
       @enrollment.completed?.should be_false
@@ -946,6 +929,7 @@ describe Enrollment do
       @enrollment.end_at = 2.days.ago
       @enrollment.completed_at = nil
       @enrollment.save!
+      @enrollment.reload
 
       @enrollment.completed_at.should == @enrollment.end_at
       @enrollment.completed_at = yesterday
@@ -989,7 +973,7 @@ describe Enrollment do
 
       # set up a group category in that course with restricted self sign-up and
       # put both users in one of its groups
-      category = @course.group_categories.build
+      category = group_category
       category.configure_self_signup(true, true)
       category.save
       group = category.groups.create(:context => @course)
@@ -1024,7 +1008,7 @@ describe Enrollment do
 
       # set up a group category in that course *without* restrictions on self
       # sign-up and put both users in one of its groups
-      category = @course.group_categories.build
+      category = group_category
       category.configure_self_signup(true, false)
       category.save
       group = category.groups.create(:context => @course)
@@ -1053,7 +1037,7 @@ describe Enrollment do
 
       # set up a group category in that course with restricted self sign-up and
       # put the user in one of its groups
-      category = @course.group_categories.build
+      category = group_category
       category.configure_self_signup(true, false)
       category.save
       group = category.groups.create(:context => @course)
@@ -1077,7 +1061,7 @@ describe Enrollment do
 
       # set up a group category in that course with restricted self sign-up and
       # put the user in one of its groups
-      category = @course.group_categories.build
+      category = group_category
       category.configure_self_signup(true, false)
       category.save
       group = category.groups.create(:context => @course)
@@ -1181,18 +1165,18 @@ describe Enrollment do
     it "should uncache user enrollments when rejected" do
       enable_cache do
         course_with_student(:active_course => 1)
-        User.update_all({:updated_at => 1.year.ago}, :id => @user.id)
+        User.where(:id => @user).update_all(:updated_at => 1.year.ago)
         @user.reload
         @user.cached_current_enrollments.should == [@enrollment]
         @enrollment.reject!
         # have to get the new updated_at
         @user.reload
-        @user.cached_current_enrollments(true).should == []
+        @user.cached_current_enrollments.should == []
       end
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       describe "limit_privileges_to_course_section!" do
         it "should use the right shard to find the enrollments" do
@@ -1276,7 +1260,7 @@ describe Enrollment do
         course(:active_all => 1)
         user
         Enrollment.ended.should == []
-        @enrollment = Enrollment.create!(:user => @user, :course => @course)
+        @enrollment = StudentEnrollment.create!(:user => @user, :course => @course)
         Enrollment.ended.should == []
         @enrollment.update_attribute(:workflow_state, 'active')
         Enrollment.ended.should == []
@@ -1493,12 +1477,12 @@ describe Enrollment do
     it "should remove the enrollment from User#cached_current_enrollments" do
       enable_cache do
         course_with_student(:active_all => 1)
-        User.update_all({:updated_at => 1.day.ago}, :id => @user.id)
+        User.where(:id => @user).update_all(:updated_at => 1.day.ago)
         @user.reload
         @user.cached_current_enrollments.should == [ @enrollment ]
         @enrollment.conclude
         @user.reload
-        @user.cached_current_enrollments(true).should == []
+        @user.cached_current_enrollments.should == []
       end
     end
   end
@@ -1640,6 +1624,34 @@ describe Enrollment do
       @enrollment.record_recent_activity(now)
       @enrollment.record_recent_activity(now + 11.minutes)
       @enrollment.last_activity_at.should.to_s == (now + 11.minutes).to_s
+    end
+  end
+
+  describe "updating cached due dates" do
+    before do
+      course_with_student
+      @assignments = [
+        assignment_model(:course => @course),
+        assignment_model(:course => @course)
+      ]
+    end
+
+    it "triggers a batch when enrollment is created" do
+      DueDateCacher.expects(:recompute).never
+      DueDateCacher.expects(:recompute_course).with(@course)
+      @course.enroll_student(user)
+    end
+
+    it "triggers a batch when enrollment is deleted" do
+      DueDateCacher.expects(:recompute).never
+      DueDateCacher.expects(:recompute_course).with(@course)
+      @enrollment.destroy
+    end
+
+    it "does not trigger when nothing changed" do
+      DueDateCacher.expects(:recompute).never
+      DueDateCacher.expects(:recompute_course).never
+      @enrollment.save
     end
   end
 end

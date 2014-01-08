@@ -10,6 +10,7 @@ describe "course settings" do
 
   it "should show unused tabs to teachers" do
     get "/courses/#{@course.id}/settings"
+    wait_for_ajaximations
     ff("#section-tabs .section.section-tab-hidden").count.should > 0
   end
 
@@ -19,6 +20,7 @@ describe "course settings" do
       get "/courses/#{@course.id}/settings"
 
       f('.edit_course_link').click
+      wait_for_ajaximations
       f('.grading_standard_checkbox').click unless is_checked('.grading_standard_checkbox')
       f('.edit_letter_grades_link').click
       f('.find_grading_standard_link').click
@@ -54,7 +56,7 @@ describe "course settings" do
       extra_options.should be_displayed
       more_options_link.text.should == less_options_text
       more_options_link.click
-      wait_for_animations
+      wait_for_ajaximations
       extra_options.should_not be_displayed
       more_options_link.text.should == more_options_text
     end
@@ -66,8 +68,11 @@ describe "course settings" do
       a.save!
       get "/courses/#{@course.id}/settings"
       f('.edit_course_link').click
+      wait_for_ajaximations
       f('.course_form_more_options_link').click
+      wait_for_ajaximations
       f('#course_self_enrollment').click
+      wait_for_ajaximations
       submit_form('#course_form')
       wait_for_ajaximations
 
@@ -96,14 +101,14 @@ describe "course settings" do
       replace_content(code_input, course_code)
       click_option('#course_locale', locale_text)
       f('.course_form_more_options_link').click
-      wait_for_animations
+      wait_for_ajaximations
       f('.course_form_more_options').should be_displayed
       submit_form(course_form)
       wait_for_ajaximations
 
       f('.course_info').should include_text(course_name)
       f('.course_code').should include_text(course_code)
-      f('.locale').should include_text(locale_text)
+      f('span.locale').should include_text(locale_text)
     end
 
     it "should add a section" do
@@ -123,7 +128,7 @@ describe "course settings" do
       add_section('Delete Section')
       get "/courses/#{@course.id}/settings#tab-sections"
 
-      f('.section_link.delete_section_link').click
+      f('.delete_section_link').click
       keep_trying_until do
         driver.switch_to.alert.should_not be_nil
         driver.switch_to.alert.accept
@@ -138,7 +143,7 @@ describe "course settings" do
       add_section('Edit Section')
       get "/courses/#{@course.id}/settings#tab-sections"
 
-      f('.section_link.edit_section_link').click
+      f('.edit_section_link').click
       section_input = f('#course_section_name')
       keep_trying_until { section_input.should be_displayed }
       replace_content(section_input, edit_text)
@@ -191,7 +196,7 @@ describe "course settings" do
     it "should not include student view student in the statistics count" do
       @fake_student = @course.student_view_student
       get "/courses/#{@course.id}/settings"
-      fj('.summary tr:nth(1)').text.should match /Students:\s*None/
+      fj('.summary tr:nth(0)').text.should match /Students:\s*None/
     end
 
     it "should show the count of custom role enrollments" do
@@ -201,9 +206,9 @@ describe "course settings" do
       course_with_student(:course => @course, :role_name => "weirdo")
       course_with_teacher(:course => @course, :role_name => "teach")
       get "/courses/#{@course.id}/settings"
-      fj('.summary tr:nth(2)').text.should match /weirdo:\s*1/
-      fj('.summary tr:nth(4)').text.should match /teach:\s*1/
-      fj('.summary tr:nth(6)').text.should match /taaaa:\s*None/
+      fj('.summary tr:nth(1)').text.should match /weirdo:\s*1/
+      fj('.summary tr:nth(3)').text.should match /teach:\s*1/
+      fj('.summary tr:nth(5)').text.should match /taaaa:\s*None/
     end
   end
 end

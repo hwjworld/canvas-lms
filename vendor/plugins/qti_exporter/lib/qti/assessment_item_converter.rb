@@ -4,7 +4,7 @@ class AssessmentItemConverter
   DEFAULT_CORRECT_WEIGHT = 100
   DEFAULT_INCORRECT_WEIGHT = 0
   DEFAULT_POINTS_POSSIBLE = 1
-  UNSUPPORTED_TYPES = ['File Upload', 'Hot Spot', 'Quiz Bowl', 'WCT_JumbledSentence', 'file_upload_question']
+  UNSUPPORTED_TYPES = ['File Upload', 'Hot Spot', 'Quiz Bowl', 'WCT_JumbledSentence']
   WEBCT_REL_REGEX = "/webct/RelativeResourceManager/Template/"
 
   attr_reader :base_dir, :identifier, :href, :interaction_type, :title, :question
@@ -90,8 +90,10 @@ class AssessmentItemConverter
       if @migration_type and UNSUPPORTED_TYPES.member?(@migration_type)
         @question[:question_type] = @migration_type
         @question[:unsupported] = true
-      elsif !%w(text_only_question).include?(@migration_type)
+      elsif !%w(text_only_question file_upload_question).include?(@migration_type)
         self.parse_question_data
+      else
+        @question[:question_type] ||= @migration_type
       end
     rescue => e
       message = "There was an error exporting an assessment question"
@@ -138,6 +140,11 @@ class AssessmentItemConverter
           when 'WCT_FillInTheBlank'
             @question[:question_type] = 'fill_in_multiple_blanks_question'
             @question[:is_vista_fib] = true
+          when 'WCT_ShortAnswer'
+            if @doc.css("responseDeclaration[baseType=\"string\"]").count > 1
+              @question[:question_type] = 'fill_in_multiple_blanks_question'
+              @question[:is_vista_fib] = true
+            end
           when 'Jumbled Sentence'
             @question[:question_type] = 'multiple_dropdowns_question'
           when 'Essay'
@@ -215,7 +222,7 @@ class AssessmentItemConverter
   end
 
   def clear_html(text)
-    text.gsub(/<\/?[^>\n]*>/, "").gsub(/&#\d+;/) {|m| m[2..-1].to_i.chr rescue '' }.gsub(/&\w+;/, "").gsub(/(?:\\r\\n)+/, "\n")
+    text.gsub(/<\/?[^>\n]*>/, "").gsub(/&#\d+;/) {|m| m[2..-1].to_i.chr(text.encoding) rescue '' }.gsub(/&\w+;/, "").gsub(/(?:\\r\\n)+/, "\n")
   end
   
   def sanitize_html_string(string, remove_extraneous_nodes=false)
@@ -240,11 +247,12 @@ class AssessmentItemConverter
         attrs.each do |attr|
           if subnode[attr]
             val = URI.unescape(subnode[attr])
-            if val.start_with?( WEBCT_REL_REGEX)
+            if val.start_with?(WEBCT_REL_REGEX)
               # It's from a webct package so the references may not be correct
               # Take a path like: /webct/RelativeResourceManager/Template/Imported_Resources/qti web/f11g3_r.jpg
               # Reduce to: Imported_Resources/qti web/f11g3_r.jpg
-              val.gsub!(WEBCT_REL_REGEX)
+              val.gsub!(WEBCT_REL_REGEX, '')
+              val.gsub!("RelativeResourceManager/Template/", "")
 
               # Sometimes that path exists, sometimes the desired file is just in the top-level with the .xml files
               # So check for the file starting with the full relative path, going down to just the file name

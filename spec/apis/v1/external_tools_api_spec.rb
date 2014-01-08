@@ -37,6 +37,10 @@ describe ExternalToolsController, :type => :integration do
       index_call(@course)
     end
 
+    it "should search for external tools by name" do
+      search_call(@course)
+    end
+
     it "should create an external tool" do
       create_call(@course)
     end
@@ -61,6 +65,13 @@ describe ExternalToolsController, :type => :integration do
     it "should paginate" do
       paginate_call(@course)
     end
+
+    if Canvas.redis_enabled?
+      it 'should allow sessionless launches' do
+        sessionless_launch_by_url(@course, 'course')
+        sessionless_launch_by_id(@course, 'course')
+      end
+    end
   end
 
   describe "in an account" do
@@ -79,6 +90,10 @@ describe ExternalToolsController, :type => :integration do
 
     it "should return external tools" do
       index_call(@account, "account")
+    end
+
+    it "should search for external tools by name" do
+      search_call(@account, "account")
     end
 
     it "should create an external tool" do
@@ -101,6 +116,13 @@ describe ExternalToolsController, :type => :integration do
     it "should paginate" do
       paginate_call(@account, "account")
     end
+
+    if Canvas.redis_enabled?
+      it 'should allow sessionless launches' do
+        sessionless_launch_by_url(@account, 'account')
+        sessionless_launch_by_id(@account, 'account')
+      end
+    end
   end
   
 
@@ -111,7 +133,7 @@ describe ExternalToolsController, :type => :integration do
                     {:controller => 'external_tools', :action => 'show', :format => 'json',
                      :"#{type}_id" => context.id.to_s, :external_tool_id => et.id.to_s})
 
-    json.should == example_json(et)
+    json.diff(example_json(et)).should == {}
   end
 
   def not_found_call(context, type="course")
@@ -128,7 +150,21 @@ describe ExternalToolsController, :type => :integration do
                     {:controller => 'external_tools', :action => 'index', :format => 'json',
                      :"#{type}_id" => context.id.to_s})
 
-    json.should == [example_json(et)]
+    json.size.should == 1
+    json.first.diff(example_json(et)).should == {}
+  end
+
+  def search_call(context, type="course")
+    2.times { |i| context.context_external_tools.create!(:name => "first_#{i}", :consumer_key => "fakefake", :shared_secret => "sofakefake", :url => "http://www.example.com/ims/lti") }
+    ids = context.context_external_tools.map(&:id)
+
+    2.times { |i| context.context_external_tools.create!(:name => "second_#{i}", :consumer_key => "fakefake", :shared_secret => "sofakefake", :url => "http://www.example.com/ims/lti") }
+
+    json = api_call(:get, "/api/v1/#{type}s/#{context.id}/external_tools.json?search_term=fir",
+                    {:controller => 'external_tools', :action => 'index', :format => 'json',
+                     :"#{type}_id" => context.id.to_s, :search_term => 'fir'})
+
+    json.map{|h| h['id']}.sort.should == ids.sort
   end
 
   def create_call(context, type="course")
@@ -138,7 +174,7 @@ describe ExternalToolsController, :type => :integration do
     context.context_external_tools.count.should == 1
 
     et = context.context_external_tools.last
-    json.should == example_json(et)
+    json.diff(example_json(et)).should == {}
   end
 
   def update_call(context, type="course")
@@ -148,7 +184,7 @@ describe ExternalToolsController, :type => :integration do
                     {:controller => 'external_tools', :action => 'update', :format => 'json',
                      :"#{type}_id" => context.id.to_s, :external_tool_id => et.id.to_s}, post_hash)
     et.reload
-    json.should == example_json(et)
+    json.diff(example_json(et)).should == {}
   end
   
   def destroy_call(context, type="course")
@@ -174,15 +210,6 @@ describe ExternalToolsController, :type => :integration do
     json["errors"]["consumer_key"].should_not be_nil
     json["errors"]["url"].first["message"].should == "Either the url or domain should be set."
     json["errors"]["domain"].first["message"].should == "Either the url or domain should be set."
-
-    raw_api_call(:post, "/api/v1/#{type}s/#{context.id}/external_tools.json",
-                 {:controller => 'external_tools', :action => 'create', :format => 'json',
-                  :"#{type}_id" => context.id.to_s},
-                 {:url => "http://www.example.com/ims/lti", :domain => "example.com"})
-    json = JSON.parse response.body
-    response.code.should == "400"
-    json["errors"]["url"].first["message"].should == "Either the url or domain should be set, not both."
-    json["errors"]["domain"].first["message"].should == "Either the url or domain should be set, not both."
   end
   
   def unauthorized_call(context, type="course")
@@ -229,6 +256,7 @@ describe ExternalToolsController, :type => :integration do
     et.account_navigation = {:url=>"http://www.example.com/ims/lti/account", :text=>"Account nav", :custom_fields=>{"key"=>"value"}}
     et.user_navigation = {:url=>"http://www.example.com/ims/lti/user", :text=>"User nav"}
     et.editor_button = {:url=>"http://www.example.com/ims/lti/editor", :icon_url=>"/images/delete.png", :selection_width=>50, :selection_height=>50, :text=>"editor button"}
+    et.homework_submission = {:url=>"http://www.example.com/ims/lti/editor", :selection_width=>50, :selection_height=>50, :text=>"homework submission"}
     et.resource_selection = {:url=>"http://www.example.com/ims/lti/resource", :text => "", :selection_width=>50, :selection_height=>50}
     et.save!
     et
@@ -250,6 +278,37 @@ describe ExternalToolsController, :type => :integration do
     end
     hash
   end
+
+  def sessionless_launch_by_url(context, type)
+    tool = tool_with_everything(context)
+    sessionless_launch(context, type, tool, {url: tool.url})
+  end
+
+  def sessionless_launch_by_id(context, type)
+    tool = tool_with_everything(context)
+    sessionless_launch(context, type, tool, {id: tool.id.to_s})
+  end
+
+  def sessionless_launch(context, type, tool, params)
+    # initial api call
+    json = api_call(
+      :get,
+      "/api/v1/#{type}s/#{context.id}/external_tools/sessionless_launch?#{params.map{|k,v| "#{k}=#{v}" }.join('&')}",
+      {:controller => 'external_tools', :action => 'generate_sessionless_launch', :format => 'json', :"#{type}_id" => context.id.to_s}.merge(params)
+    )
+    json.should include('url')
+
+    # remove the user session (it's supposed to be sessionless, after all), and make the request
+    remove_user_session
+
+    # request/verify the lti launch page
+    get json['url']
+    response.code.should == '200'
+
+    doc = Nokogiri::HTML(response.body)
+    doc.at_css('form').should_not be_nil
+    doc.at_css('form')['action'].should == tool.url
+  end
   
   def example_json(et=nil)
     {"name"=>"External Tool Eh",
@@ -259,25 +318,49 @@ describe ExternalToolsController, :type => :integration do
      "domain"=>nil,
      "url"=>"http://www.example.com/ims/lti",
      "id"=>et ? et.id : nil,
+     "workflow_state"=>"public",
      "resource_selection"=>
              {"text"=>"",
               "url"=>"http://www.example.com/ims/lti/resource",
               "selection_height"=>50,
-              "selection_width"=>50},
+              "selection_width"=>50,
+              "label"=>""},
      "privacy_level"=>"public",
      "editor_button"=>
              {"icon_url"=>"/images/delete.png",
               "text"=>"editor button",
               "url"=>"http://www.example.com/ims/lti/editor",
               "selection_height"=>50,
-              "selection_width"=>50},
+              "selection_width"=>50,
+              "label"=>"editor button"},
+     "homework_submission"=>
+             {"text"=>"homework submission",
+              "url"=>"http://www.example.com/ims/lti/editor",
+              "selection_height"=>50,
+              "selection_width"=>50,
+              "label"=>"homework submission"},
      "custom_fields"=>{"key1"=>"val1", "key2"=>"val2"},
      "description"=>"For testing stuff",
      "user_navigation"=>
-             {"text"=>"User nav", "url"=>"http://www.example.com/ims/lti/user"},
+             {"text"=>"User nav",
+              "url"=>"http://www.example.com/ims/lti/user",
+              "label"=>"User nav",
+              "selection_height"=>400,
+              "selection_width"=>800},
      "course_navigation" =>
-             {"text"=>"Course nav", "url"=>"http://www.example.com/ims/lti/course", "visibility"=>"admins", "default"=> "disabled"},
+             {"text"=>"Course nav",
+              "url"=>"http://www.example.com/ims/lti/course",
+              "visibility"=>"admins",
+              "default"=> "disabled",
+              "label"=>"Course nav",
+              "selection_height"=>400,
+              "selection_width"=>800},
      "account_navigation"=>
-             {"text"=>"Account nav", "url"=>"http://www.example.com/ims/lti/account", "custom_fields"=>{"key"=>"value"}}}
+             {"text"=>"Account nav",
+              "url"=>"http://www.example.com/ims/lti/account",
+              "custom_fields"=>{"key"=>"value"},
+              "label"=>"Account nav",
+              "selection_height"=>400,
+              "selection_width"=>800}}
   end
 end

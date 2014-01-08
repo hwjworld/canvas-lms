@@ -10,6 +10,7 @@ define [
   'wikiSidebar'
   'str/htmlEscape'
   'compiled/models/DiscussionTopic'
+  'compiled/models/Announcement'
   'compiled/models/Assignment'
   'jquery'
   'compiled/fn/preventDefault'
@@ -20,7 +21,7 @@ define [
   'compiled/jquery.rails_flash_notifications' #flashMessage
 ], (I18n, ValidatedFormView, AssignmentGroupSelector, GradingTypeSelector,
 GroupCategorySelector, PeerReviewsSelector, _, template, wikiSidebar,
-htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) ->
+htmlEscape, DiscussionTopic, Announcement, Assignment, $, preventDefault, MissingDateDialog) ->
 
   class EditView extends ValidatedFormView
 
@@ -32,8 +33,13 @@ htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) -
 
     dontRenableAfterSaveSuccess: true
 
+    els:
+      '#availability_options': '$availabilityOptions'
+      '#use_for_grading': '$useForGrading'
+
     events: _.extend(@::events,
       'click .removeAttachment' : 'removeAttachment'
+      'change #use_for_grading' : 'toggleAvailabilityOptions'
     )
 
     @optionProperty 'permissions'
@@ -46,15 +52,20 @@ htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) -
 
     isTopic: => @model.constructor is DiscussionTopic
 
+    isAnnouncement: => @model.constructor is Announcement
+
     toJSON: ->
-      json = _.extend super, @options,
+      data = super
+      json = _.extend data, @options,
         showAssignment: !!@assignmentGroupCollection
         useForGrading: @model.get('assignment')?
         isTopic: @isTopic()
+        isAnnouncement: @isAnnouncement()
         contextIsCourse: @options.contextType is 'courses'
         canAttach: @permissions.CAN_ATTACH
         canModerate: @permissions.CAN_MODERATE
         isLargeRoster: ENV?.IS_LARGE_ROSTER || false
+        threaded: data.discussion_type is "threaded"
       json.assignment = json.assignment.toView()
       json
 
@@ -121,30 +132,28 @@ htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) -
     getFormData: ->
       data = super
       data.title ||= I18n.t 'default_discussion_title', 'No Title'
-      data.delayed_post_at = '' unless data.delay_posting
-      data.discussion_type = if data.threaded then 'threaded' else 'side_comment'
-      data.podcast_has_student_posts = false unless data.podcast_enabled
+      data.discussion_type = if data.threaded is '1' then 'threaded' else 'side_comment'
+      data.podcast_has_student_posts = false unless data.podcast_enabled is '1'
 
       assign_data = data.assignment
       delete data.assignment
 
-      if assign_data?.set_assignment
-        data.set_assignment = true
+      if assign_data?.set_assignment is '1'
+        data.set_assignment = '1'
         data.assignment = @updateAssignment(assign_data)
+        data.delayed_post_at = ''
+        data.lock_at = ''
       else
         # Announcements don't have assignments.
         # DiscussionTopics get a model created for them in their
         # constructor. Delete it so the API doesn't automatically
         # create assignments unless the user checked "Use for Grading".
-        # We're doing this here because syncWithMultipart doesn't call
-        # the model's toJSON method unfortunately, so assignment params
-        # would be sent in the response, creating an assignment.
         # The controller checks for set_assignment on the assignment model,
         # so we can't make it undefined here for the case of discussion topics.
-        data.assignment = {set_assignment: false}
+        data.assignment = {set_assignment: '0'}
 
       # these options get passed to Backbone.sync in ValidatedFormView
-      @saveOpts = multipart: !!data.attachment
+      @saveOpts = multipart: !!data.attachment, proxyAttachment: true
 
       data
 
@@ -156,6 +165,7 @@ htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) -
       data.lock_at = defaultDate?.get('lock_at') or null
       data.unlock_at = defaultDate?.get('unlock_at') or null
       data.due_at = defaultDate?.get('due_at') or null
+      data.assignment_overrides = @dueDateOverrideView.getOverrides()
 
       assignment = @model.get('assignment')
       assignment or= new Assignment
@@ -192,11 +202,40 @@ htmlEscape, DiscussionTopic, Assignment, $, preventDefault, MissingDateDialog) -
     )
 
     validateBeforeSave: (data, errors) =>
-      if @isTopic() && data.set_assignment
+      if data.delay_posting == "0"
+        data.delayed_post_at = null
+      if @isTopic() && data.set_assignment is '1'
         if @assignmentGroupSelector?
           errors = @assignmentGroupSelector.validateBeforeSave(data, errors)
         unless ENV?.IS_LARGE_ROSTER
           errors = @groupCategorySelector.validateBeforeSave(data, errors)
+        data2 =
+          assignment_overrides: @dueDateOverrideView.getAllDates(data.assignment.toJSON())
+        errors = @dueDateOverrideView.validateBeforeSave(data2, errors)
+        errors = @_validatePointsPossible(data, errors)
       else
         @model.set 'assignment', {set_assignment: false}
       errors
+
+    _validatePointsPossible: (data, errors) =>
+      assign = data.assignment
+      frozenPoints = _.contains(assign.frozenAttributes(), "points_possible")
+
+      if !frozenPoints and assign.pointsPossible() and isNaN(parseFloat(assign.pointsPossible()))
+        errors["assignment[points_possible]"] = [
+          message: I18n.t 'points_possible_number', 'Points possible must be a number'
+        ]
+      errors
+
+    showErrors: (errors) ->
+      # override view handles displaying override errors, remove them
+      # before calling super
+      # see getFormValues in DueDateView.coffee
+      delete errors.assignmentOverrides
+      super(errors)
+
+    toggleAvailabilityOptions: ->
+      if @$useForGrading.is(':checked')
+        @$availabilityOptions.hide()
+      else
+        @$availabilityOptions.show()

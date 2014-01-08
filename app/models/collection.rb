@@ -24,6 +24,7 @@ class Collection < ActiveRecord::Base
   belongs_to :context, :polymorphic => true
   has_many :collection_items
   has_many :following_user_follows, :class_name => 'UserFollow', :as => :followed_item
+  validates_presence_of :context_id, :context_type, :workflow_state
 
   after_save :touch_context
 
@@ -34,8 +35,8 @@ class Collection < ActiveRecord::Base
   before_save :handle_visibility_change
   after_create :check_auto_follow_users
 
-  named_scope :public, :conditions => { :visibility => 'public' }
-  named_scope :newest_first, { :order => "id desc" }
+  scope :public, where(:visibility => 'public')
+  scope :newest_first, order("id DESC")
 
   def public?
     self.visibility == 'public'
@@ -46,7 +47,7 @@ class Collection < ActiveRecord::Base
     state :deleted
   end
 
-  named_scope :active, { :conditions => { :workflow_state => 'active' } }
+  scope :active, where(:workflow_state => 'active')
 
   def destroy
     self.workflow_state = 'deleted'

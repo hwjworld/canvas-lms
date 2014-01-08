@@ -1,7 +1,7 @@
 # encoding: utf-8
 
 require File.expand_path(File.dirname(__FILE__) + '/../../../../spec/spec_helper')
-require 'zip/zipfilesystem'
+require 'zip/filesystem'
 
 if Qti.migration_executable
 
@@ -40,7 +40,7 @@ describe Qti::Converter do
   it "should publish as assignment on import if specified" do
     copy = Tempfile.new(['spec-canvas', '.zip'])
     FileUtils.cp(fname, copy.path)
-    Zip::ZipFile.open(copy.path) do |zf|
+    Zip::File.open(copy.path) do |zf|
       zf.file.open("settings.xml", 'w') do |f|
         f.write <<-XML
         <settings>
@@ -65,7 +65,7 @@ describe Qti::Converter do
   it "should re-use the same assignment on update" do
     copy = Tempfile.new(['spec-canvas', '.zip'])
     FileUtils.cp(fname, copy.path)
-    Zip::ZipFile.open(copy.path) do |zf|
+    Zip::File.open(copy.path) do |zf|
       zf.file.open("settings.xml", 'w') do |f|
         f.write <<-XML
         <settings>
@@ -121,8 +121,35 @@ describe Qti::Converter do
 
     quiz = @course.quizzes.last
     quiz.should be_present
+    quiz.should_not be_available
     quiz.quiz_questions.size.should == 9
-    match_ignoring(quiz.quiz_questions.map(&:question_data), RESPONDUS_QUESTIONS, %w[id assessment_question_id match_id prepped_for_import question_bank_migration_id])
+    match_ignoring(quiz.quiz_questions.map(&:question_data), RESPONDUS_QUESTIONS, %w[id assessment_question_id match_id prepped_for_import question_bank_migration_id quiz_question_id])
+  end
+
+  it "should apply respondus settings" do
+    setup_migration(File.expand_path("../fixtures/canvas_respondus_question_types.zip", __FILE__))
+    @migration.update_migration_settings(:apply_respondus_settings_file => true)
+    @migration.save!
+    do_migration
+
+    quiz = @course.quizzes.last
+    quiz.should be_present
+    quiz.should be_available
+  end
+
+  it "should be able to import directly into an assessment question bank" do
+    setup_migration(File.expand_path("../fixtures/canvas_respondus_question_types.zip", __FILE__))
+    @migration.update_migration_settings(:migration_ids_to_import =>
+                                             { :copy => { :all_quizzes => false, :all_assessment_question_banks => true} })
+    @migration.save!
+    do_migration
+
+    @course.quizzes.count.should == 0
+    qb = @course.assessment_question_banks.last
+    qb.should be_present
+    qb.assessment_questions.size.should == 9
+    data = qb.assessment_questions.map(&:question_data).sort_by!{|q| q["migration_id"]}
+    match_ignoring(data, RESPONDUS_QUESTIONS, %w[id assessment_question_id match_id missing_links position prepped_for_import question_bank_migration_id quiz_question_id])
   end
 
   def match_ignoring(a, b, ignoring = [])
@@ -135,8 +162,10 @@ describe Qti::Converter do
     when Array
       a.size.should == b.size
       a.each_with_index do |e,i|
-        match_ignoring(e, b[i], ignoring)
+        match_ignoring(e.to_hash, b[i], ignoring)
       end
+    when QuizQuestion::QuestionData
+      a.to_hash.should == b
     else
       a.should == b
     end
@@ -168,7 +197,6 @@ describe Qti::Converter do
   def do_migration
     Canvas::Migration::Worker::QtiWorker.new(@migration.id).perform
     @migration.reload
-    @migration.import_content_without_send_later
     @migration.should be_imported
   end
 
@@ -205,7 +233,7 @@ describe Qti::Converter do
          "weight"=>0,
          "id"=>9001}],
       "question_text"=>
-       "This is the question text.<br>\nThese are some symbol font characters: <span style=\"font-size: 12pt;\">&part;&hearts;&exist;&Delta;&fnof;</span>"},
+       "This is the question text.<br>\nThese are some symbol font characters: <span style=\"font-size: 12pt;\">∂♥∃Δƒ</span>"},
      {"position"=>2,
       "correct_comments"=>"correct answer feedback",
       "question_type"=>"true_false_question",
@@ -377,10 +405,6 @@ describe Qti::Converter do
         {"match_id"=>5875, "text"=>"Distractor 1"},
         {"match_id"=>2330, "text"=>"Distractor 2"}],
       "question_text"=>"This is the question text."}]
-if RUBY_VERSION >= '1.9'
-  # handle new nokogiri behavior of NOT turning these utf-8 chars into html entities
-  RESPONDUS_QUESTIONS[0]["question_text"] = "This is the question text.<br>\nThese are some symbol font characters: <span style=\"font-size: 12pt;\">∂♥∃Δƒ</span>"
-end
 end
 
 end

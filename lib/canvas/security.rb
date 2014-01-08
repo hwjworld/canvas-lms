@@ -27,7 +27,7 @@ module Canvas::Security
   end
   
   def self.config
-    @config ||= (YAML.load_file(RAILS_ROOT + "/config/security.yml")[RAILS_ENV] rescue nil)
+    @config ||= (YAML.load_file(Rails.root+"config/security.yml")[Rails.env] rescue nil)
   end
   
   def self.encrypt_password(secret, key, encryption_key = nil)
@@ -107,12 +107,10 @@ module Canvas::Security
     key = login_attempts_key(pseudonym)
     exptime = Setting.get('login_attempts_ttl', 5.minutes.to_s).to_i
     redis = Canvas.redis
-    redis.pipelined do
-      redis.hset(key, 'unique_id', pseudonym.unique_id)
-      redis.hincrby(key, 'total', 1)
-      redis.hincrby(key, ip, 1) if ip.present?
-      redis.expire(key, exptime)
-    end
+    redis.hset(key, 'unique_id', pseudonym.unique_id)
+    redis.hincrby(key, 'total', 1)
+    redis.hincrby(key, ip, 1) if ip.present?
+    redis.expire(key, exptime)
     nil
   end
 

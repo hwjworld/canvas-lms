@@ -26,6 +26,8 @@ class ContentParticipation < ActiveRecord::Base
 
   after_save :update_participation_count
 
+  validates_presence_of :content_type, :content_id, :user_id, :workflow_state
+
   workflow do
     state :unread
     state :read
@@ -39,7 +41,7 @@ class ContentParticipation < ActiveRecord::Base
 
     participant = nil
     unique_constraint_retry do
-      participant = content.content_participations.find(:first, :conditions => { :user_id => user.id })
+      participant = content.content_participations.where(:user_id => user).first
       participant ||= content.content_participations.build(:user => user, :workflow_state => "unread")
       participant.attributes = opts.slice(*ContentParticipation.accessible_attributes.to_a)
       participant.save if participant.new_record? || participant.changed?

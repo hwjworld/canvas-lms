@@ -50,6 +50,7 @@ class UnzipAttachment
     @logger ||= opts[:logger]
     @rename_files = !!opts[:rename_files]
     @migration_id_map = opts[:migration_id_map] || {}
+    @queue_scribd = !!opts[:queue_scribd]
 
     raise ArgumentError, "Must provide a context." unless self.context && self.context.is_a_context?
     raise ArgumentError, "Must provide a filename." unless self.filename
@@ -94,7 +95,7 @@ class UnzipAttachment
       @attachments = []
       id_positions = {}
       path_positions = zip_stats.paths_with_positions(last_position)
-      Zip::ZipFile.open(self.filename).each_with_index do |entry, index|
+      Zip::File.open(self.filename).each_with_index do |entry, index|
         next if should_skip?(entry)
 
         folder_path_array = path_elements_for(@context_files_folder.full_name)
@@ -110,8 +111,7 @@ class UnzipAttachment
         # Hyphenate the path.  So, /some/file/path becomes some-file-path
         # Since Tempfile guarantees that the names are unique, we don't
         # have to worry about what this name actually is.
-        # NOTE: strip leading ~ as workaround for https://bugs.ruby-lang.org/issues/7547
-        Tempfile.open(filename.sub(/^~/, '')) do |f|
+        Tempfile.open(filename) do |f|
           begin
             entry.extract(f.path) { true }
             # This is where the attachment actually happens.  See file_in_context.rb
@@ -142,7 +142,7 @@ class UnzipAttachment
 
   def update_attachment_positions(id_positions)
     updates = id_positions.inject([]) do |memo, (id, position)|
-      returning(memo){ |m| m << "WHEN id=#{id} THEN #{position}" if id && position }
+      memo.tap { |m| m << "WHEN id=#{id} THEN #{position}" if id && position }
     end
 
     if updates.any?
@@ -152,6 +152,7 @@ class UnzipAttachment
   end
 
   def queue_scribd_submissions(attachments)
+    return unless @queue_scribd
     scribdable_ids = attachments.select(&:scribdable?).map(&:id)
     if scribdable_ids.any?
       Attachment.send_later_enqueue_args(:submit_to_scribd, { :strand => 'scribd', :max_attempts => 1 }, scribdable_ids)
@@ -256,7 +257,7 @@ class ZipFileStats
   end
 
   def validate_against(context)
-    max = Setting.get_cached('max_zip_file_count', '100000').to_i
+    max = Setting.get('max_zip_file_count', '100000').to_i
     if file_count > max
       raise ArgumentError, "Zip File cannot have more than #{max} entries"
     end
@@ -279,7 +280,7 @@ class ZipFileStats
 
   private
   def process!
-    Zip::ZipFile.open(filename).each do |entry|
+    Zip::File.open(filename).each do |entry|
       @file_count += 1
       @total_size += [entry.size, Attachment.minimum_size_for_quota].max
       @paths << entry.name

@@ -1,4 +1,4 @@
-define ['Backbone'], ({View}) ->
+define ['Backbone', 'compiled/util/mixin'], ({View}, mixing) ->
 
   module 'View'
 
@@ -29,6 +29,13 @@ define ['Backbone'], ({View}) ->
     equal view.foo, 'bar', 'set option as instance property'
     view = new Backbone.View foo: 'bar'
     ok !view.foo?, 'parent class property options not poluted'
+
+  test 'children should have a list of child views', -> 
+    class SomeView extends Backbone.View
+      @child 'test', '.test'
+
+    view = new SomeView test: new Backbone.View
+    equal view.children.length, 1, "Creates an array of children view stored on .children"
 
   test 'template optionProperty', ->
     view = new View
@@ -136,3 +143,68 @@ define ['Backbone'], ({View}) ->
     # call the handlers manually
     view.foo()
     view.bar()
+
+  test 'View.mixin initialize, attach and afterRender magic tricks', ->
+    mixin1 =
+      initialize: sinon.spy()
+      attach: sinon.spy()
+      afterRender: sinon.spy()
+    mixin2 =
+      initialize: sinon.spy()
+      attach: sinon.spy()
+      afterRender: sinon.spy()
+    class SomeView extends View
+      @mixin mixin1, mixin2
+    view = new SomeView
+    view.render()
+    ok mixin1.initialize.calledOnce, 'called mixin1 initialize'
+    ok mixin2.initialize.calledOnce, 'called mixin2 initialize'
+    ok mixin1.afterRender.calledOnce, 'called mixin1 afterRender'
+    ok mixin2.afterRender.calledOnce, 'called mixin2 afterRender'
+    ok mixin1.attach.calledOnce, 'called mixin1 attach'
+    ok mixin2.attach.calledOnce, 'called mixin2 attach'
+
+  test 'View.mixin does not merge into parent class', ->
+    mixin = defaults: foo: 'bar'
+    class Foo extends View
+      @mixin mixin
+    equal View::defaults.foo, undefined, 'View::defaults was not appended'
+    equal Foo::defaults.foo, 'bar', 'Foo::defaults was appended'
+
+  test 'View.mixin with compound mixins', ->
+    afterRender1 = sinon.spy()
+    mixin1 = afterRender: afterRender1
+    afterRender2 = sinon.spy()
+    mixin2 = mixing {}, mixin1, afterRender: afterRender2
+    afterRender3 = sinon.spy()
+    mixin3 = afterRender: afterRender3
+    afterRenderFoo = sinon.spy()
+    class Foo extends View
+      @mixin mixin2, mixin3
+      afterRender: -> super and afterRenderFoo()
+    window.Foo = Foo
+    view = new Foo
+    view.render()
+    ok afterRender1.calledOnce, 'called mixin1 afterRender'
+    ok afterRender2.calledOnce, 'called mixin2 afterRender'
+    ok afterRender3.calledOnce, 'called mixin3 afterRender'
+    ok afterRenderFoo.calledOnce, 'called foo afterRender'
+
+    # order of mixing in shouldn't matter
+    afterRender4 = sinon.spy()
+    afterRender5 = sinon.spy()
+    afterRender6 = sinon.spy()
+    mixin4 = afterRender: afterRender4
+    mixin5 = mixing {}, mixin4, afterRender: afterRender5
+    mixin6 = afterRender: afterRender6
+    afterRenderBar = sinon.spy()
+    class Bar extends View
+      @mixin mixin6, mixin5
+      afterRender: -> super and afterRenderBar()
+    window.Bar = Bar
+    bar = new Bar
+    bar.render()
+    ok afterRender4.calledOnce, 'called mixin4 afterRender'
+    ok afterRender5.calledOnce, 'called mixin5 afterRender'
+    ok afterRender6.calledOnce, 'called mixin6 afterRender'
+    ok afterRenderBar.calledOnce, 'called bar afterRender'

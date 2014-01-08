@@ -35,7 +35,7 @@ $(document).ready(function() {
     <ul class="wizard_options_list">
       <% if can_do @context, @current_user, :manage_content %>
         <li class="option download_step <%= 'completed' unless @context.attachments.active.first.nil? %>">
-          <a href="<%= context_url(@context, :context_imports_url) %>" class="header icon-download"><%= t('links.import', %{Import Content}) %></a>
+          <a href="<%= context_url(@context, :context_content_migrations_url) %>" class="header icon-download"><%= t('links.import', %{Import Content}) %></a>
           <div class="details" style="display: none;">
             <%= t 'details.import', %{If you've been using another course management system, you probably have stuff in there that you're going to want moved over to Canvas.  We can walk you through the process of easily migrating your content into Canvas.} %>
           </div>
@@ -51,7 +51,7 @@ $(document).ready(function() {
       <% end %>
       <% if can_do @context, @current_user, :manage_students %>
         <li class="option students_step <%=  'completed' unless @context.students.first.nil? %>">
-          <a href="<%= context_url(@context, :context_details_url, :wizard => 1) %>#add_students" class="header icon-group-new"><%= t('links.students', %{Add Students to the Course}) %></a>
+          <a href="<%= course_users_path(course_id: @context) %>" class="header icon-group-new"><%= t('links.students', %{Add Students to the Course}) %></a>
           <div class="details" style="display: none;">
             <%= t 'details.students', %{You'll definitely want some of these.  What's the fun of teaching a course if nobody's even listening?} %>
           </div>
@@ -91,7 +91,7 @@ $(document).ready(function() {
       <% end %>
       <% if can_do @context, @current_user, :manage_admin_users %>
         <li class="option ta_step <%= 'completed' unless @context.tas.empty? %>">
-          <a href="<%= context_url(@context, :context_details_url, :wizard => 1) %>#add_tas" class="header icon-user-add"><%= t('links.tas', %{Add TAs to the Course}) %></a>
+          <a href="<%= course_users_path(:course_id => @context) %>" class="header icon-user-add"><%= t('links.tas', %{Add TAs to the Course}) %></a>
           <div class="details" style="display: none;">
             <%= t 'details.tas', %{You may want to assign some TAs to help you with the course.  TAs can grade student submissions, help moderate the discussions and even update due dates and assignment details for you.} %>
           </div>
@@ -112,7 +112,7 @@ $(document).ready(function() {
             <%= mt 'details.publish.form', %{All finished?  Time to publish your course!  Click the button below to make it official!
 
 Publishing will allow the users to begin participating in the course.} %>
-            <% form_for @context, :url => course_path(@context), :html => {:method => :put} do |f| %>
+            <%= form_for @context, :url => course_path(@context), :html => {:method => :put} do |f| %>
               <input type="hidden" name="course[event]" value="offer"/>
               <div class="button-container" style="text-align: center;">
                 <button type="submit" class="btn btn-large"><%= t('buttons.publish', %{Publish Course}) %></button>

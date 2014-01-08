@@ -1,9 +1,11 @@
 define [
   'jquery'
   'compiled/views/ValidatedFormView'
+  'compiled/fn/preventDefault'
   'jst/DialogFormWrapper'
   'jqueryui/dialog'
-], ($, ValidatedFormView, wrapper) ->
+  'compiled/jquery/fixDialogButtons'
+], ($, ValidatedFormView, preventDefault, wrapper) ->
 
   ##
   # Creates a form dialog.
@@ -39,6 +41,12 @@ define [
       # will figure out the title from the trigger if null
       title: null
 
+      width: null
+
+      height: null
+
+      fixDialogButtons: true
+
     $dialogAppendTarget: $ 'body'
 
     className: 'dialogFormView'
@@ -51,18 +59,24 @@ define [
     initialize: ->
       super
       @setTrigger()
+      @open = @firstOpen
+      @renderEl = @firstRenderEl
 
     ##
+    # the function to open the dialog.  will be set to either @firstOpen or
+    # @openAgain depending on the state of the view
+    #
     # @api public
-    open: ->
-      @firstOpen()
-      @openAgain()
-      @open = @openAgain
+    open: null
 
     ##
     # @api public
     close: ->
-      @dialog.close()
+      # could be calling this from the close event
+      # so we want to check if it's open
+      if @dialog?.isOpen()
+        @dialog.close()
+      @focusReturnsTo()?.focus()
 
     ##
     # @api public
@@ -77,6 +91,9 @@ define [
     remove: ->
       super
       @$trigger?.off '.dialogFormView'
+      @$dialog?.remove()
+      @open = @firstOpen
+      @renderEl = @firstRenderEl
 
     ##
     # lazy init on first open
@@ -85,6 +102,8 @@ define [
       @insert()
       @render()
       @setupDialog()
+      @openAgain()
+      @open = @openAgain
 
     ##
     # @api private
@@ -98,8 +117,14 @@ define [
       @$el.appendTo @$dialogAppendTarget
 
     ##
-    # @api private
-    setTrigger: ->
+    # If your trigger isn't rendered after this view (like a parent view
+    # contains the trigger) then you can set this manually (like in the
+    # parent views afterRender), otherwise it'll use the options.
+    #
+    # @api public
+    #
+    setTrigger: (el) ->
+      @options.trigger = el if el
       return unless @options.trigger
       @$trigger = $ @options.trigger
       @attachTrigger()
@@ -107,41 +132,61 @@ define [
     ##
     # @api private
     attachTrigger: ->
-      @$trigger.on 'click.dialogFormView', @toggle
+      @$trigger?.on 'click.dialogFormView', preventDefault(@toggle)
+
+    ##
+    # the function to render the element.  it will either be firstRenderEl or
+    # renderElAgain depending on the state of the view
+    #
+    # @api private
+    renderEl: null
+
+    firstRenderEl: =>
+      @$el.html @wrapperTemplate @toJSON()
+      @renderElAgain()
+      # reassign: only render the outlet now
+      @renderEl = @renderElAgain
 
     ##
     # @api private
-    renderEl: =>
-      @$el.html @wrapperTemplate()
-      @renderOutlet()
-      # reassign: only render the outlout now
-      @renderEl = @renderOutlet
-
-    ##
-    # @api private
-    renderOutlet: =>
-      html = @template @model.toJSON()
+    renderElAgain: =>
+      html = @template @toJSON()
       @$el.find('.outlet').html html
 
     ##
     # @api private
     getDialogTitle: ->
       @options.title or
-      @$trigger.attr('title') or
+      @$trigger?.attr('title') or
       @getAriaTitle()
 
     getAriaTitle: ->
-      ariaID = @$trigger.attr 'aria-describedby'
+      ariaID = @$trigger?.attr 'aria-describedby'
       $("##{ariaID}").text()
 
     ##
     # @api private
     setupDialog: ->
-      @$el.dialog
+      opts =
         autoOpen: false
         title: @getDialogTitle()
-      .fixDialogButtons()
+        close: =>
+          @close()
+          @trigger 'close'
+        open: => @trigger 'open'
+      opts.width = @options.width
+      opts.height = @options.height
+      @$el.dialog(opts)
+      @$el.fixDialogButtons() if @options.fixDialogButtons
       @dialog = @$el.data 'dialog'
+
+    setDimensions: (width, height) ->
+      width = if width? then width else @options.width
+      height = if height? then height else @options.height
+      opts =
+        width: width
+        height: height
+      @$el.dialog(opts)
 
     ##
     # @api private
@@ -149,3 +194,11 @@ define [
       super
       @close()
 
+    ##
+    # @api private
+    focusReturnsTo: ->
+      return null unless @$trigger
+      if id = @$trigger.data('focusReturnsTo')
+        return $("##{id}")
+      else
+        return @$trigger

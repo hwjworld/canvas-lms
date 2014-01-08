@@ -25,6 +25,22 @@ define([
   'jqueryui/sortable' /* /\.sortable/ */,
   'jqueryui/widget' /* /\.widget/ */
 ], function(I18n, $, htmlEscape) {
+  // Create a function to pass to setTimeout
+var speakMessage = function ($this, message) {
+  if ($this.data('accessible-message-timeout')) {
+    // Clear any previously scheduled message from this field.
+    clearTimeout($this.data('accessible-message-timeout'));
+    $this.removeData('accessible-message-timeout');
+  }
+  if (!message) {
+    // No message? Do nothing when the timeout expires.
+    return function () {};
+  }
+  return function () {
+    $('#aria_alerts').text(message);
+    $this.removeData('accessible-message-timeout');
+  };
+};
 
   $.parseDateTime = function(date, time) {
     var date = $.datepicker.parseDate('mm/dd/yy', date);
@@ -418,17 +434,26 @@ define([
         $field.wrap('<div class="input-append" />');
         $thingToPutSuggestAfter = $field.parent('.input-append');
 
-        $field.datepicker({
+        var datepickerOptions = {
           timePicker: (!options.dateOnly),
           constrainInput: false,
           dateFormat: 'M d, yy',
           showOn: 'button',
           buttonText: '<i class="icon-calendar-month"></i>',
           buttonImageOnly: false
-        });
+        };
+        $field.datepicker($.extend(datepickerOptions, options.datepicker));
       }
 
       var $suggest = $('<div class="datetime_suggest" />').insertAfter($thingToPutSuggestAfter);
+
+      if (options.addHiddenInput) {
+        var $hiddenInput = $('<input type="hidden">').insertAfter($field);
+        $hiddenInput.attr('name', $field.attr('name'));
+        $hiddenInput.val($field.val());
+        $field.removeAttr('name');
+        $field.data('hiddenInput', $hiddenInput);
+      }
 
       $field.bind("change focus blur keyup", function() {
         var $this = $(this),
@@ -442,6 +467,9 @@ define([
         if (!$this.val()) { text = ""; }
         if (d) {
           $this.data('date', d);
+          if ($this.data('hiddenInput')) {
+            $this.data('hiddenInput').val(d);
+          }
           if(!options.timeOnly && !options.dateOnly && (d.getHours() || d.getMinutes() || options.alwaysShowTime)) {
             text = d.toString('ddd MMM d, yyyy h:mmtt');
             $this
@@ -458,8 +486,20 @@ define([
         $suggest
           .toggleClass('invalid_datetime', text == parse_error_message)
           .text(text);
-
+        if (text == parse_error_message ) {
+          $this.data(
+            'accessible-message-timeout',
+            setTimeout(speakMessage($this, text), 2000)
+          );
+        } else if ($this.data('accessible-message-timeout')) {
+          // Error resolved, cancel the alert.
+          clearTimeout($this.data('accessible-message-timeout'));
+          $this.removeData('accessible-message-timeout');
+        }
       }).triggerHandler('change');
+      // TEMPORARY FIX: Hide from aria screenreader until the jQuery UI datepicker is updated for accessibility.
+      $field.next().attr('aria-hidden', 'true');
+      $field.next().attr('tabindex', '-1');
     });
     return this;
   };

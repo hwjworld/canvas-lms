@@ -82,6 +82,7 @@
       <xs:element name="assignment_group_identifierref" type="xs:string" minOccurs="0"/>
       <xs:element name="grading_standard_identifierref" type="xs:string" minOccurs="0"/>
       <xs:element name="rubric_identifierref" type="xs:string" minOccurs="0"/>
+      <xs:element name="rubric_external_identifier" type="xs:string" minOccurs="0"/>
       <xs:element name="rubric_use_for_grading" type="xs:boolean" minOccurs="0"/>
       <xs:element name="rubric_hide_score_total" type="xs:boolean" minOccurs="0"/>
       <xs:element name="quiz_identifierref" type="xs:string" minOccurs="0"/>
@@ -128,8 +129,19 @@
         <xs:element name="posted_at" type="xs:dateTime" minOccurs="0"/>
         <xs:element name="delayed_post_at" type="xs:dateTime" minOccurs="0"/>
         <xs:element name="position" type="xs:integer" minOccurs="0"/>
+        <xs:element name="pinned" type="xs:boolean" minOccurs="0"/>
+        <xs:element name="require_initial_post" type="xs:boolean" minOccurs="0"/>
         <xs:element name="external_feed_identifierref" type="xs:string" minOccurs="0"/>
         <xs:element name="attachment_identifierref" type="xs:string" minOccurs="0"/>
+        <xs:element name="discussion_type" minOccurs="0">
+          <xs:simpleType>
+            <xs:restriction base="xs:string">
+              <xs:enumeration value="side_comment"/>
+              <xs:enumeration value="threaded"/>
+              <xs:enumeration value="flat"/>
+            </xs:restriction>
+          </xs:simpleType>
+        </xs:element>
         <xs:element name="type" minOccurs="0">
           <xs:simpleType>
             <xs:restriction base="xs:string">
@@ -379,6 +391,7 @@
               <xs:element name="points_possible" type="xs:float" minOccurs="0"/>
               <xs:element name="hide_score_total" type="xs:boolean" minOccurs="0"/>
               <xs:element name="free_form_criterion_comments" type="xs:boolean" minOccurs="0"/>
+              <xs:element name="external_identifier" type="xs:string" minOccurs="0"/>
 
               <xs:element name="criteria">
                 <xs:complexType>

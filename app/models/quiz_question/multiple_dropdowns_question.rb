@@ -18,10 +18,29 @@
 
 class QuizQuestion::MultipleDropdownsQuestion < QuizQuestion::FillInMultipleBlanksQuestion
   def find_chosen_answer(variable, response)
-    @question_data[:answers].detect{ |answer| answer[:blank_id] == variable && answer[:id] == response.to_i } || { :text => nil, :id => nil, :weight => 0 }
+    @question_data.answers.detect{ |answer| answer[:blank_id] == variable && answer[:id].to_i == response.to_i } || { :text => nil, :id => nil, :weight => 0 }
   end
 
   def answer_text(answer)
     answer[:id]
+  end
+
+  def stats(responses)
+    @question_data = super
+    answers = @question_data[:answer_sets]
+
+    responses.each do |response|
+      answers.each do |answer|
+        answer[:responses] += 1 if response[:correct]
+        answer[:answer_matches].each do |right|
+          if response[:"answer_id_for_#{answer[:blank_id]}"] == right[:id]
+            right[:responses] += 1
+            right[:user_ids] << response[:user_id]
+          end
+        end
+      end
+    end
+
+    @question_data
   end
 end

@@ -8,6 +8,7 @@ describe "courses" do
     def create_new_course
       get "/"
       f('[aria-controls="new_course_form"]').click
+      wait_for_ajaximations
       f('[name="course[name]"]').send_keys "testing"
       f('.ui-dialog-buttonpane .btn-primary').click
     end
@@ -24,13 +25,13 @@ describe "courses" do
       create_new_course
 
       wizard_box = f("#wizard_box")
-      keep_trying_until { wizard_box.displayed? }
+      keep_trying_until { wizard_box.should be_displayed }
       wizard_box.find_element(:css, ".close_wizard_link").click
 
       refresh_page
-      wait_for_animations # we need to give the wizard a chance to pop up
+      wait_for_ajaximations # we need to give the wizard a chance to pop up
       wizard_box = f("#wizard_box")
-      wizard_box.displayed?.should be_false
+      wizard_box.should_not be_displayed
 
       # un-remember the setting
       driver.execute_script "localStorage.clear()"
@@ -49,19 +50,19 @@ describe "courses" do
       course_with_teacher_logged_in
       create_new_course
 
-      wait_for_animations
+      wait_for_ajaximations
       wizard_box = find_wizard_box
       wizard_box.find_element(:css, ".close_wizard_link").click
-      wait_for_animations
+      wait_for_ajaximations
       wizard_box.should_not be_displayed
       checklist_button = f('.wizard_popup_link')
       checklist_button.should be_displayed
       checklist_button.click
-      wait_for_animations
+      wait_for_ajaximations
       checklist_button.should_not be_displayed
       wizard_box = find_wizard_box
       wizard_box.find_element(:css, ".close_wizard_link").click
-      wait_for_animations
+      wait_for_ajaximations
       wizard_box.should_not be_displayed
       checklist_button.should be_displayed
     end
@@ -71,14 +72,16 @@ describe "courses" do
 
       # first try setting the quota explicitly
       get "/courses/#{@course.id}/details"
-      driver.find_element(:link, 'Course Details').click
+      f("#ui-id-1").click
       form = f("#course_form")
       f("#course_form .edit_course_link").should be_displayed
       form.find_element(:css, ".edit_course_link").click
+      wait_for_ajaximations
       quota_input = form.find_element(:css, "input#course_storage_quota_mb")
       replace_content(quota_input, "10")
       submit_form(form)
       keep_trying_until { f(".loading_image_holder").nil? rescue true }
+      form = f("#course_form")
       form.find_element(:css, ".course_info.storage_quota_mb").text.should == "10"
 
       # then try just saving it (without resetting it)
@@ -86,8 +89,10 @@ describe "courses" do
       form = f("#course_form")
       form.find_element(:css, ".course_info.storage_quota_mb").text.should == "10"
       form.find_element(:css, ".edit_course_link").click
+      wait_for_ajaximations
       submit_form(form)
       keep_trying_until { f(".loading_image_holder").nil? rescue true }
+      form = f("#course_form")
       form.find_element(:css, ".course_info.storage_quota_mb").text.should == "10"
 
       # then make sure it's right after a reload
@@ -113,8 +118,8 @@ describe "courses" do
       options = select.find_elements(:css, 'option')
       options.length.should == 2
       select.click
+      wait_for_ajaximations
       find_with_jquery('#course_url option:not([selected])').click
-
       driver.current_url.should match %r{/courses/#{course2.id}/grades}
     end
 
@@ -131,60 +136,8 @@ describe "courses" do
       # Test that the page loads properly the first time.
       get "/courses/#{@course.id}/users"
       wait_for_ajaximations
-      ff('.ui-state-error').length.should == 0
-      ff('.student_roster .user').length.should == 50
-      ff('.teacher_roster .user').length.should == 2
-      ff('.teacher_roster .user_list').length.should == 2
-
-      # Test the infinite scroll.
-      driver.execute_script <<-END
-        $list    = $('.student_roster .users-wrapper:first-child .user_list'),
-        $list[0].scrollTop = $list[0].scrollHeight - $list.height();
-      END
-      wait_for_ajaximations
-      ff('.student_roster .user').length.should == 60
-    end
-
-    it "should include separate course roles sections on users page" do
-      course_with_teacher_logged_in
-
-      @course.enroll_user(user, 'TaEnrollment')
-      @course.enroll_user(user, 'StudentEnrollment')
-
-      roles = [
-        ['Student', 51, '.student_roster .users-wrapper:nth-child(2)'],
-        ['Teacher', 52, '.teacher_roster .users-wrapper:nth-child(2)'],
-        ['Ta', 53, '.teacher_roster .users-wrapper:nth-child(4)']
-      ]
-      roles.each do |type, num, css|
-        role = @course.account.roles.build :name => "Custom#{type}"
-        role.base_role_type = "#{type}Enrollment"
-        role.save!
-
-        num.times do |n|
-          @course.enroll_user(user, "#{type}Enrollment", :role_name => role.name)
-        end
-      end
-
-      # Test that the page loads properly the first time.
-      get "/courses/#{@course.id}/users"
-      wait_for_ajaximations
-      ff('.ui-state-error').length.should == 0
-
-      roles.each do |type, num, css|
-        ff("#{css} h2").first.text.should == "Custom#{type}"
-        ff("#{css} .user").length.should == 50
-
-        # Test the infinite scroll.
-
-        driver.execute_script <<-END
-          $list    = $('#{css} .user_list'),
-          $list[0].scrollTop = $list[0].scrollHeight - $list.height();
-        END
-        wait_for_ajaximations
-
-        ff("#{css} .user").length.should == num
-      end
+      flash_message_present?(:error).should be_false
+      ff('.roster .rosterUser').length.should == 50
     end
 
     it "should only show users that a user has permissions to view" do
@@ -203,7 +156,7 @@ describe "courses" do
       # Test that only users in the approved section are displayed.
       get "/courses/#{@course.id}/users"
       wait_for_ajaximations
-      ff('.student_roster .user').length.should == 1
+      ff('.roster .rosterUser').length.should == 2
     end
 
     it "should display users section name" do
@@ -222,8 +175,8 @@ describe "courses" do
 
       get "/courses/#{@course.id}/users"
       wait_for_ajaximations
-      sections = ff('.student_roster .section')
-      sections.map(&:text).sort.should == %w{One One Two}
+      sections = ff('.roster .section')
+      sections.map(&:text).sort.should == ["One", "One", "Two", "Unnamed Course", "Unnamed Course"]
     end
 
     it "should display users section name properly when separated by custom roles" do
@@ -295,6 +248,18 @@ describe "courses" do
     it "should validate that a user cannot see a course they are not enrolled in" do
       login_as(@student.name)
       f('#menu').should_not include_text('Courses')
+    end
+
+    it "should display user groups on courses page" do
+      group = Group.create!(:name => "group1", :context => @course)
+      group.add_user(@student)
+
+      login_as(@student.name)
+      get '/courses'
+
+      content = f('#content')
+      content.should include_text('My Groups')
+      content.should include_text('group1')
     end
   end
 end

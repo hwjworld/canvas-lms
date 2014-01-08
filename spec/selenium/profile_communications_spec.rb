@@ -46,7 +46,7 @@ describe "profile communication settings" do
   it "should render" do
     get "/profile/communication"
     # Page title should match expected
-    f('title').text.should == 'Notification Preferences'
+    driver.execute_script("return document.title").should == 'Notification Preferences'
     # Expect breadcrumbs to correctly display page name
     f('#breadcrumbs').should include_text('Notification Preferences')
     # Expect h2 with
@@ -67,6 +67,37 @@ describe "profile communication settings" do
     wait_for_ajaximations
     fj('tr.grouping:first th.comm-channel:last').should include_text('Cell Number')
     fj('tr.grouping:first th.comm-channel:last').should include_text('8011235555@vtext.com')
+  end
+
+  let(:sns_response) { stub(data: {endpointarn: 'endpointarn'}) }
+  let(:sns_client) { stub(create_platform_endpoint: sns_response) }
+  let(:sns_developer_key_sns_field) { stub(client: sns_client) }
+
+  let(:sns_developer_key) do
+    DeveloperKey.stubs(:sns).returns(sns_developer_key_sns_field)
+    dk = DeveloperKey.default
+    dk.sns_arn = 'apparn'
+    dk.save!
+    dk
+  end
+
+  let(:sns_access_token) { @user.access_tokens.create!(developer_key: sns_developer_key) }
+  let(:sns_channel) { @user.communication_channels.create_push(sns_access_token, 'device_token') }
+
+  it "should display an sns channel" do
+    sns_channel
+    get "/profile/communication"
+    wait_for_ajaximations
+    fj('tr.grouping:first th.comm-channel:last').should include_text('Push Notification')
+  end
+
+  it "should only display asap and never for sns channels" do
+    sns_channel
+    get "/profile/communication"
+    wait_for_ajaximations
+    cell = find_frequency_cell("Grading", sns_channel.id)
+    buttons = ffj('.frequency', cell)
+    buttons.map {|b| b.attribute(:'data-value')}.should == %w(immediately never)
   end
 
   it "should load the initial state of a user-pref checkbox" do

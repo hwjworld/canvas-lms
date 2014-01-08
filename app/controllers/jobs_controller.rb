@@ -16,7 +16,7 @@ class JobsController < ApplicationController
   def index
     @flavor = params[:flavor] || 'current'
 
-    ActiveRecord::Base::ConnectionSpecification.with_environment(:slave) do
+    Shackles.activate(:slave) do
       respond_to do |format|
         format.html do
           @running_jobs_refresh_seconds = Setting.get('running_jobs_refresh_seconds', 2.seconds.to_s).to_f
@@ -24,16 +24,16 @@ class JobsController < ApplicationController
         end
 
         format.js do
-          result = {}
           case params[:only]
           when 'running'
-            result[:running] = Delayed::Job.running_jobs
+            render :json => {running: Delayed::Job.running_jobs.map{ |j| j.as_json(include_root: false, except: [:handler, :last_error]) }}
           when 'tags'
-            result[:tags] = Delayed::Job.tag_counts(@flavor, POPULAR_TAG_COUNTS)
+            render :json => {tags: Delayed::Job.tag_counts(@flavor, POPULAR_TAG_COUNTS)}
           when 'jobs'
-            result.merge!(jobs(@flavor, params[:limit] || LIMIT, params[:offset].to_i))
+            jobs = jobs(@flavor, params[:limit] || LIMIT, params[:offset].to_i)
+            jobs[:jobs].map!{ |j| j.as_json(:include_root => false, :except => [:handler, :last_error]) }
+            render :json => jobs
           end
-          render :json => result.to_json(:include_root => false, :except => [:handler, :last_error])
         end
       end
     end
@@ -45,7 +45,7 @@ class JobsController < ApplicationController
     else
       job = Delayed::Job.find(params[:id])
     end
-    render :json => job.to_json(:include_root => false)
+    render :json => job.as_json(:include_root => false)
   end
 
   def batch_update

@@ -59,8 +59,9 @@ module Api
     unless columns.empty?
       find_params = sis_make_params_for_sis_mapping_and_columns(columns, sis_mapping, root_account)
       return result if find_params == :not_found
-      find_params[:select] = :id
-      result.concat collection.all(find_params).map(&:id)
+      # pluck ignores include
+      find_params[:joins] = find_params.delete(:include) if find_params[:include]
+      result.concat collection.scoped(find_params).pluck(:id)
       result.uniq!
     end
     result
@@ -88,9 +89,17 @@ module Api
       { :lookups => { 'sis_section_id' => 'sis_source_id', 'id' => 'id' },
         :is_not_scoped_to_account => ['id'].to_set,
         :scope => 'root_account_id' },
+    'groups' =>
+        { :lookups => { 'sis_group_id' => 'sis_source_id', 'id' => 'id' },
+          :is_not_scoped_to_account => ['id'].to_set,
+          :scope => 'root_account_id' },
   }.freeze
 
-  ID_REGEX = %r{\A\d+\z}
+  # (digits in 2**63-1) - 1, so that any ID representable in MAX_ID_LENGTH
+  # digits is < 2**63, which is the max signed 64-bit integer, which is what's
+  # used for the DB ids.
+  MAX_ID_LENGTH = 18
+  ID_REGEX = %r{\A\d{1,#{MAX_ID_LENGTH}}\z}
 
   def self.sis_parse_id(id, lookups)
     # returns column_name, column_value
@@ -178,32 +187,50 @@ module Api
     return find_params
   end
 
-  def self.per_page_for(controller)
-    [(controller.params[:per_page] || Setting.get_cached('api_per_page', '10')).to_i, Setting.get_cached('api_max_per_page', '50').to_i].min
+  def self.max_per_page
+    Setting.get('api_max_per_page', '50').to_i
+  end
+
+  def self.per_page_for(controller, options={})
+    per_page = controller.params[:per_page] || options[:default] || Setting.get('api_per_page', '10')
+    max = options[:max] || max_per_page
+    [[per_page.to_i, 1].max, max.to_i].min
   end
 
   # Add [link HTTP Headers](http://www.w3.org/Protocols/9707-link-header.html) for pagination
   # The collection needs to be a will_paginate collection (or act like one)
   # a new, paginated collection will be returned
   def self.paginate(collection, controller, base_url, pagination_args = {})
-    per_page = per_page_for(controller)
-    pagination_args.reverse_merge!({ :page => controller.params[:page], :per_page => per_page })
-    collection = collection.paginate(pagination_args)
-    return unless collection.respond_to?(:next_page)
+    pagination_args.reverse_merge!(
+      page: controller.params[:page],
+      per_page: per_page_for(controller,
+        default: pagination_args.delete(:default_per_page),
+        max: pagination_args.delete(:max_per_page)))
 
-    first_page = collection.respond_to?(:first_page) && collection.first_page
-    first_page ||= 1
-
-    last_page = (pagination_args[:without_count] ? nil : collection.total_pages)
-    last_page = nil if last_page.to_i <= 1
+    begin
+      paginated = collection.paginate(pagination_args)
+    rescue Folio::InvalidPage
+      if pagination_args[:page].to_s =~ /\d+/ && pagination_args[:page].to_i > 0 && collection.build_page.ordinal_pages?
+        # for backwards compatibility we currently require returning [] for
+        # pages beyond the end of an ordinal collection, rather than a 404.
+        paginated = Folio::Ordinal::Page.create
+        paginated.current_page = pagination_args[:page].to_i
+      else
+        # we're not dealing with a simple out-of-bounds on an ordinal
+        # collection, let the exception propagate (and turn into a 404)
+        raise
+      end
+    end
+    collection = paginated
 
     links = build_links(base_url, {
       :query_parameters => controller.request.query_parameters,
       :per_page => collection.per_page,
+      :current => collection.current_page,
       :next => collection.next_page,
       :prev => collection.previous_page,
-      :first => first_page,
-      :last => last_page,
+      :first => collection.first_page,
+      :last => collection.last_page,
     })
     controller.response.headers["Link"] = links.join(',') if links.length > 0
     collection
@@ -216,7 +243,7 @@ module Api
     qp = opts[:query_parameters] || {}
     qp = qp.with_indifferent_access.except(*EXCLUDE_IN_PAGINATION_LINKS)
     base_url += "#{qp.to_query}&" if qp.present?
-    [:next, :prev, :first, :last].each do |k|
+    [:current, :next, :prev, :first, :last].each do |k|
       if opts[k].present?
         links << "<#{base_url}page=#{opts[k]}&per_page=#{opts[:per_page]}>; rel=\"#{k}\""
       end
@@ -247,13 +274,31 @@ module Api
     }
   end
 
-  # See User.submissions_for_given_assignments and SubmissionsApiController#for_students
-  mattr_accessor :assignment_ids_for_students_api
-
   # a hash of allowed html attributes that represent urls, like { 'a' => ['href'], 'img' => ['src'] }
   UrlAttributes = Instructure::SanitizeField::SANITIZE[:protocols].inject({}) { |h,(k,v)| h[k] = v.keys; h }
 
-  def api_user_content(html, context = @context, user = @current_user)
+  def api_bulk_load_user_content_attachments(htmls, context = @context, user = @current_user)
+    rewriter = UserContent::HtmlRewriter.new(context, user)
+    attachment_ids = []
+    rewriter.set_handler('files') do |m|
+      attachment_ids << m.obj_id if m.obj_id
+    end
+
+    htmls.each { |html| rewriter.translate_content(html) }
+
+    if attachment_ids.blank?
+      {}
+    else
+      attachments = if context.is_a?(User) || context.nil?
+                      Attachment.where(id: attachment_ids)
+                    else
+                      context.attachments.where(id: attachment_ids)
+                    end
+      attachments.index_by(&:id)
+    end
+  end
+
+  def api_user_content(html, context = @context, user = @current_user, preloaded_attachments = {})
     return html if html.blank?
 
     # if we're a controller, use the host of the request, otherwise let HostUrl
@@ -268,9 +313,26 @@ module Api
 
     rewriter = UserContent::HtmlRewriter.new(context, user)
     rewriter.set_handler('files') do |match|
-      obj = match.obj_id && match.obj_class.find_by_id(match.obj_id)
+      if match.obj_id
+        obj   = preloaded_attachments[match.obj_id]
+        obj ||= if context.is_a?(User) || context.nil?
+                  Attachment.find_by_id(match.obj_id)
+                else
+                  context.attachments.find_by_id(match.obj_id)
+                end
+      end
       next unless obj && rewriter.user_can_view_content?(obj)
-      file_download_url(obj.id, :verifier => obj.uuid, :download => '1', :host => host, :protocol => protocol)
+
+      if ["Course", "Group", "Account", "User"].include?(obj.context_type)
+        if match.rest.start_with?("/preview")
+          url = self.send("#{obj.context_type.downcase}_file_preview_url", obj.context_id, obj.id, :verifier => obj.uuid, :only_path => true)
+        else
+          url = self.send("#{obj.context_type.downcase}_file_download_url", obj.context_id, obj.id, :verifier => obj.uuid, :download => '1', :only_path => true)
+        end
+      else
+        url = file_download_url(obj.id, :verifier => obj.uuid, :download => '1', :only_path => true)
+      end
+      url
     end
     html = rewriter.translate_content(html)
 
@@ -279,7 +341,7 @@ module Api
     # translate media comments into html5 video tags
     doc = Nokogiri::HTML::DocumentFragment.parse(html)
     doc.css('a.instructure_inline_media_comment').each do |anchor|
-      media_id = anchor['id'].try(:gsub, /^media_comment_/, '')
+      media_id = anchor['id'].try(:sub, /^media_comment_/, '')
       next if media_id.blank?
 
       if anchor['class'].try(:match, /\baudio_comment\b/)
@@ -339,6 +401,75 @@ module Api
     return doc.to_s
   end
 
+  # This removes the verifier parameters that are added to attachment links by api_user_content
+  # and adds context (e.g. /courses/:id/) if it is missing
+  # exception: it leaves user-context file links alone
+  def process_incoming_html_content(html)
+    return html unless html.present?
+    # shortcut html documents that definitely don't have anything we're interested in
+    return html unless html =~ %r{verifier=|['"]/files|instructure_inline_media_comment}
+
+    attrs = ['href', 'src']
+    link_regex = %r{/files/(\d+)/(?:download|preview)}
+    verifier_regex = %r{(\?)verifier=[^&]*&?|&verifier=[^&]*}
+
+    context_types = ["Course", "Group", "Account"]
+    skip_context_types = ["User"]
+
+    doc = Nokogiri::HTML(html)
+    doc.search("*").each do |node|
+      attrs.each do |attr|
+        if link = node[attr]
+          if link =~ link_regex
+            if link.start_with?('/files')
+              att_id = $1
+              att = Attachment.find_by_id(att_id)
+              if att
+                next if skip_context_types.include?(att.context_type)
+                if context_types.include?(att.context_type)
+                  link = "/#{att.context_type.underscore.pluralize}/#{att.context_id}" + link
+                end
+              end
+            end
+            if link.include?('verifier=')
+              link.gsub!(verifier_regex, '\1')
+            end
+            node[attr] = link
+          end
+        end
+      end
+    end
+
+    # translate audio and video tags generated by media comments back into anchor tags
+    # try to add the relevant attributes to media comment anchor tags to retain MediaObject info
+    doc.css('audio.instructure_inline_media_comment, video.instructure_inline_media_comment, a.instructure_inline_media_comment').each do |node|
+      if node.name == 'a'
+        media_id = node['id'].try(:sub, /^media_comment_/, '')
+      else
+        media_id = node['data-media_comment_id']
+      end
+      next if media_id.blank?
+
+      if node.name == 'a'
+        anchor = node
+        unless anchor['class'] =~ /\b(audio|video)_comment\b/
+          media_object = MediaObject.active.by_media_id(media_id).first
+          anchor['class'] += " #{media_object.media_type}_comment" if media_object
+        end
+      else
+        comment_type = "#{node.name}_comment"
+        anchor = Nokogiri::XML::Node.new('a', doc)
+        anchor['class'] = "instructure_inline_media_comment #{comment_type}"
+        anchor['id'] = "media_comment_#{media_id}"
+        node.replace(anchor)
+      end
+
+      anchor['href'] = "/media_objects/#{media_id}"
+    end
+
+    return doc.at_css('body').inner_html
+  end
+
   def value_to_boolean(value)
     Canvas::Plugin.value_to_boolean(value)
   end
@@ -354,7 +485,22 @@ module Api
                     "Quiz" => "Quiz",
                     "ContextModuleSubHeader" => "SubHeader",
                     "ExternalUrl" => "ExternalUrl",
-                    "ContextExternalTool" => "ExternalTool" }.freeze
+                    "ContextExternalTool" => "ExternalTool",
+                    "ContextModule" => "Module",
+                    "ContentTag" => "ModuleItem" }.freeze
+
+  # matches the other direction, case insensitively
+  def self.api_type_to_canvas_name(api_type)
+    unless @inverse_map
+      m = {}
+      API_DATA_TYPE.each do |k, v|
+        m[v.downcase] = k
+      end
+      @inverse_map = m
+    end
+    return nil unless api_type
+    @inverse_map[api_type.downcase]
+  end
 
   # maps canvas URLs to API URL helpers
   # target array is return type, helper, name of each capture, and optionally a Hash of extra arguments
@@ -391,6 +537,15 @@ module Api
       %r{^/groups/#{ID}/files/(#{ID})/} => ['File', :api_v1_attachment_url, :id],
       %r{^/users/#{ID}/files/(#{ID})/} => ['File', :api_v1_attachment_url, :id],
       %r{^/files/(#{ID})/} => ['File', :api_v1_attachment_url, :id],
+
+      # List quizzes
+      %r{^/courses/(#{ID})/quizzes$} => ['[Quiz]', :api_v1_course_quizzes_url, :course_id],
+
+      # Get quiz
+      %r{^/courses/(#{ID})/quizzes/(#{ID})$} => ['Quiz', :api_v1_course_quiz_url, :course_id, :id],
+
+      # Launch LTI tool
+      %r{^/courses/(#{ID})/external_tools/retrieve\?url=(.*)$} => ['SessionlessLaunchUrl', :api_v1_course_external_tool_sessionless_launch_url, :course_id, :url],
   }.freeze
 
   def api_endpoint_info(protocol, host, url)
@@ -407,4 +562,35 @@ module Api
     {}
   end
 
+  def self.recursively_stringify_json_ids(value)
+    case value
+    when Hash
+      stringify_json_ids(value)
+      value.each_value { |v| recursively_stringify_json_ids(v) if v.is_a?(Hash) || v.is_a?(Array) }
+    when Array
+      value.each { |v| recursively_stringify_json_ids(v) if v.is_a?(Hash) || v.is_a?(Array) }
+    end
+    value
+  end
+
+  def self.stringify_json_ids(value)
+    return unless value.is_a?(Hash)
+    value.keys.each do |key|
+      if key =~ /(^|_)id$/
+        # id, foo_id, etc.
+        value[key] = stringify_json_id(value[key])
+      elsif key =~ /(^|_)ids$/ && value[key].is_a?(Array)
+        # ids, foo_ids, etc.
+        value[key].map!{ |id| stringify_json_id(id) }
+      end
+    end
+  end
+
+  def self.stringify_json_id(id)
+    id.is_a?(Integer) ? id.to_s : id
+  end
+
+  def accepts_jsonapi?
+    !!(/application\/vnd\.api\+json/ =~ request.headers['Accept'].to_s)
+  end
 end

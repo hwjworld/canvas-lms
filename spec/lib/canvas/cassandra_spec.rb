@@ -20,9 +20,10 @@ require File.expand_path(File.dirname(__FILE__) + '/../../cassandra_spec_helper.
 
 describe "Canvas::Redis::Cassandra" do
   let(:db) do
-    @cql_db = mock()
-    CassandraCQL::Database.stubs(:new).returns(@cql_db)
-    Canvas::Cassandra::Database.new([], {}, {})
+    Canvas::Cassandra::Database.allocate.tap do |db|
+      db.send(:instance_variable_set, :@db, mock())
+      db.stubs(:sanitize).returns("")
+    end
   end
 
   describe "#batch" do
@@ -30,7 +31,7 @@ describe "Canvas::Redis::Cassandra" do
       db.expects(:execute).never
       db.in_batch?.should == false
       db.batch do
-      db.in_batch?.should == true
+        db.in_batch?.should == true
       end
       db.in_batch?.should == false
     end
@@ -79,6 +80,34 @@ describe "Canvas::Redis::Cassandra" do
       db.batch do
         db.update("2")
       end
+    end
+
+    it "should batch counter calls separately for cql3" do
+      db.db.stubs(:use_cql3?).returns(true)
+      db.expects(:execute).with("BEGIN BATCH 1 2 APPLY BATCH").once
+      db.expects(:execute).with("BEGIN COUNTER BATCH 3 4 APPLY BATCH").once
+      db.batch do
+        db.update("1")
+        db.update("2")
+        db.update_counter("3")
+        db.update_counter("4")
+      end
+    end
+
+    it "should not batch counter calls separately for older cassandra" do
+      db.db.stubs(:use_cql3?).returns(false)
+      db.expects(:execute).with("BEGIN BATCH 1 2 APPLY BATCH").once
+      db.batch do
+        db.update("1")
+        db.update_counter("2")
+      end
+    end
+  end
+
+  describe "#build_where_conditions" do
+    it "should build a where clause given a hash" do
+      db.build_where_conditions(name: "test1").should == ["name = ?", ["test1"]]
+      db.build_where_conditions(state: "ut", name: "test1").should == ["name = ? AND state = ?", ["test1", "ut"]]
     end
   end
 
@@ -138,10 +167,22 @@ describe "Canvas::Redis::Cassandra" do
     end
   end
 
+  describe "#insert_record" do
+    it "should not delete nils in an AR#attributes style hash" do
+      db.expects(:execute).with("UPDATE test_table SET name = ? WHERE id = ?", "test", 5)
+      db.insert_record("test_table", { :id => 5 }, { :name => "test", :nick => nil })
+    end
+
+    it "should not delete nils in an AR#changes style hash" do
+      db.expects(:execute).with("UPDATE test_table SET name = ? WHERE id = ?", "test", 5)
+      db.insert_record("test_table", { :id => 5 }, { :name => [nil, "test"], :nick => [nil, nil] })
+    end
+  end
+
   describe "execute and update" do
     it_should_behave_like "cassandra page views"
 
-    let(:db) { PageView.cassandra }
+    let(:db) { PageView::EventStream.database }
 
     it "should return the result from execute" do
       db.execute("select count(*) from page_views").fetch['count'].should == 0

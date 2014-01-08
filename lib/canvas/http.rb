@@ -29,7 +29,7 @@ module Canvas::HTTP
       raise(TooManyRedirectsError) if redirect_limit <= 0
 
       url, uri = CustomValidations.validate_url(url_str)
-      request = Net::HTTP::Get.new(uri.path, other_headers)
+      request = Net::HTTP::Get.new(uri.request_uri, other_headers)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true if uri.scheme == 'https'
       http.verify_mode = OpenSSL::SSL::VERIFY_NONE
@@ -72,6 +72,7 @@ module Canvas::HTTP
         http_response.read_body(tmpfile)
         tmpfile.rewind
         attachment = opts[:attachment] || Attachment.new(:filename => File.basename(uri.path))
+        attachment.filename ||= File.basename(uri.path)
         attachment.uploaded_data = tmpfile
         if attachment.content_type.blank? || attachment.content_type == "unknown/unknown"
           attachment.content_type = http_response.content_type

@@ -20,33 +20,45 @@ require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper')
 
 describe UsersController do
 
-  it "should filter account users by term" do
-    a = Account.default
-    u = user(:active_all => true)
-    a.add_user(u)
-    user_session(@user)
-    t1 = a.default_enrollment_term
-    t2 = a.enrollment_terms.create!(:name => 'Term 2')
+  describe "index" do
+    before :each do
+      @a = Account.default
+      @u = user(:active_all => true)
+      @a.add_user(@u)
+      user_session(@user)
+      @t1 = @a.default_enrollment_term
+      @t2 = @a.enrollment_terms.create!(:name => 'Term 2')
 
-    e1 = course_with_student(:active_all => true)
-    c1 = e1.course
-    c1.update_attributes!(:enrollment_term => t1)
-    e2 = course_with_student(:active_all => true)
-    c2 = e2.course
-    c2.update_attributes!(:enrollment_term => t2)
-    c3 = course_with_student(:active_all => true, :user => e1.user).course
-    c3.update_attributes!(:enrollment_term => t1)
+      @e1 = course_with_student(:active_all => true)
+      @c1 = @e1.course
+      @c1.update_attributes!(:enrollment_term => @t1)
+      @e2 = course_with_student(:active_all => true)
+      @c2 = @e2.course
+      @c2.update_attributes!(:enrollment_term => @t2)
+      @c3 = course_with_student(:active_all => true, :user => @e1.user).course
+      @c3.update_attributes!(:enrollment_term => @t1)
 
-    User.update_account_associations(User.all.map(&:id))
+      User.update_account_associations(User.all.map(&:id))
+      # NOTE: A controller test should only call the action 1 time per test.
+      # this breaks use a js_env as it attempts to set a frozen hash multiple times.
+      # This was refactored out to 3 tests to keep it from breaking but should
+      # probably be refactored as integration test.
+    end
 
-    get 'index', :account_id => a.id
-    assigns[:users].map(&:id).sort.should == [u, e1.user, c1.teachers.first, e2.user, c2.teachers.first, c3.teachers.first].map(&:id).sort
+    it "should filter account users by term - default" do
+      get 'index', :account_id => @a.id
+      assigns[:users].map(&:id).sort.should == [@u, @e1.user, @c1.teachers.first, @e2.user, @c2.teachers.first, @c3.teachers.first].map(&:id).sort
+    end
 
-    get 'index', :account_id => a.id, :enrollment_term_id => t1.id
-    assigns[:users].map(&:id).sort.should == [e1.user, c1.teachers.first, c3.teachers.first].map(&:id).sort # 1 student, enrolled twice, and 2 teachers
+    it "should filter account users by term - term 1" do
+      get 'index', :account_id => @a.id, :enrollment_term_id => @t1.id
+      assigns[:users].map(&:id).sort.should == [@e1.user, @c1.teachers.first, @c3.teachers.first].map(&:id).sort # 1 student, enrolled twice, and 2 teachers
+    end
 
-    get 'index', :account_id => a.id, :enrollment_term_id => t2.id
-    assigns[:users].map(&:id).sort.should == [e2.user, c2.teachers.first].map(&:id).sort
+    it "should filter account users by term - term 2" do
+      get 'index', :account_id => @a.id, :enrollment_term_id => @t2.id
+      assigns[:users].map(&:id).sort.should == [@e2.user, @c2.teachers.first].map(&:id).sort
+    end
   end
 
   it "should not include deleted courses in manageable courses" do
@@ -237,30 +249,7 @@ describe UsersController do
         p.user.communication_channels.first.path.should == 'jacob@instructure.com'
 
         post 'create', :pseudonym => { :unique_id => 'jacob@instructure.com' }, :user => { :name => 'Jacob Fugal', :terms_of_use => '1' }
-        response.should be_success
-
-        Pseudonym.find_all_by_unique_id('jacob@instructure.com').should == [p]
-        p.reload
-        p.should be_active
-        p.user.should be_pre_registered
-        p.user.name.should == 'Jacob Fugal'
-        p.user.communication_channels.length.should == 1
-        p.user.communication_channels.first.should be_unconfirmed
-        p.user.communication_channels.first.path.should == 'jacob@instructure.com'
-
-        # case sensitive?
-        post 'create', :pseudonym => { :unique_id => 'JACOB@instructure.com' }, :user => { :name => 'Jacob Fugal', :terms_of_use => '1' }
-        response.should be_success
-
-        Pseudonym.by_unique_id('jacob@instructure.com').all.should == [p]
-        Pseudonym.by_unique_id('JACOB@instructure.com').all.should == [p]
-        p.reload
-        p.should be_active
-        p.user.should be_pre_registered
-        p.user.name.should == 'Jacob Fugal'
-        p.user.communication_channels.length.should == 1
-        p.user.communication_channels.first.should be_unconfirmed
-        p.user.communication_channels.first.path.should == 'jacob@instructure.com'
+        response.should_not be_success
       end
 
       it "should validate acceptance of the terms" do
@@ -268,6 +257,12 @@ describe UsersController do
         response.status.should =~ /400 Bad Request/
         json = JSON.parse(response.body)
         json["errors"]["user"]["terms_of_use"].should be_present
+      end
+
+      it "should not validate acceptance of the terms if not required" do
+        Setting.set('terms_required', 'false')
+        post 'create', :pseudonym => { :unique_id => 'jacob@instructure.com' }, :user => { :name => 'Jacob Fugal' }
+        response.should be_success
       end
 
       it "should require email pseudonyms by default" do
@@ -428,7 +423,7 @@ describe UsersController do
         post 'create', :format => 'json', :account_id => account.id, :pseudonym => { :unique_id => 'jacob@instructure.com', :send_confirmation => '0' }, :user => { :name => 'Jacob Fugal' }
         response.should be_success
         p = Pseudonym.find_by_unique_id('jacob@instructure.com')
-        Message.find(:first, :conditions => { :communication_channel_id => p.user.email_channel.id, :notification_id => notification.id }).should_not be_nil
+        Message.where(:communication_channel_id => p.user.email_channel, :notification_id => notification).first.should_not be_nil
       end
 
       it "should not notify the user if the merge opportunity can't log in'" do
@@ -445,7 +440,7 @@ describe UsersController do
         post 'create', :format => 'json', :account_id => account.id, :pseudonym => { :unique_id => 'jacob@instructure.com', :send_confirmation => '0' }, :user => { :name => 'Jacob Fugal' }
         response.should be_success
         p = Pseudonym.find_by_unique_id('jacob@instructure.com')
-        Message.find(:first, :conditions => { :communication_channel_id => p.user.email_channel.id, :notification_id => notification.id }).should be_nil
+        Message.where(:communication_channel_id => p.user.email_channel, :notification_id => notification).first.should be_nil
       end
     end
   end
@@ -496,14 +491,13 @@ describe UsersController do
       @assignment.grade_student(@s1, :grade => 3)
       @assignment.grade_student(@s2, :grade => 4)
       @assignment.grade_student(@test_student, :grade => 5)
-      run_transaction_commit_callbacks
 
       get 'grades'
       assigns[:presenter].course_grade_summaries[@course.id].should == { :score => 70, :students => 2 }
     end
 
     context 'across shards' do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it 'loads courses from all shards' do
         course_with_teacher_logged_in :active_all => true
@@ -669,7 +663,7 @@ describe UsersController do
 
   describe "GET 'show'" do
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should include enrollments from all shards" do
         course_with_teacher(:active_all => 1)
@@ -685,6 +679,18 @@ describe UsersController do
         response.should be_success
         assigns[:enrollments].sort_by(&:id).should == [@enrollment, @e2]
       end
+    end
+
+    it "should respond to JSON request" do
+      account = Account.create!
+      course_with_student(:active_all => true, :account => account)
+      account_admin_user(:account => account)
+      user_with_pseudonym(:user => @admin, :account => account)
+      user_session(@admin)
+      get 'show', :id  => @student.id, :format => 'json'
+      response.should be_success
+      user = json_parse
+      user['name'].should == @student.name
     end
   end
 end

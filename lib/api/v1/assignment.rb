@@ -19,6 +19,8 @@
 module Api::V1::Assignment
   include Api::V1::Json
   include ApplicationHelper
+  include Api::V1::ExternalTools::UrlHelpers
+  include Api::V1::Locked
 
   API_ALLOWED_ASSIGNMENT_OUTPUT_FIELDS = {
     :only => %w(
@@ -47,7 +49,20 @@ module Api::V1::Assignment
     )
   }
 
-  def assignment_json(assignment, user, session,include_discussion_topic = true)
+  def assignments_json(assignments, user, session, opts = {})
+    assignments.map{ |assignment| assignment_json(assignment, user, session, opts) }
+  end
+
+  def assignment_json(assignment, user, session, opts = {})
+    opts.reverse_merge!(
+      include_discussion_topic: true,
+      include_all_dates: false,
+      override_dates: true
+    )
+
+    if opts[:override_dates] && !assignment.new_record?
+      assignment = assignment.overridden_for(user)
+    end
     fields = assignment.new_record? ? API_ASSIGNMENT_NEW_RECORD_FIELDS : API_ALLOWED_ASSIGNMENT_OUTPUT_FIELDS
     hash = api_json(assignment, user, session, fields)
     hash['course_id'] = assignment.context_id
@@ -69,7 +84,10 @@ module Api::V1::Assignment
 
     # use already generated hash['description'] because it is filtered by
     # Assignment#filter_attributes_for_user when the assignment is locked
-    hash['description'] = api_user_content(hash['description'], @context || assignment.context)
+    hash['description'] = api_user_content(hash['description'],
+                                           @context || assignment.context,
+                                           user,
+                                           opts[:preloaded_user_content_attachments] || {})
     hash['muted'] = assignment.muted?
     hash['html_url'] = course_assignment_url(assignment.context_id, assignment)
 
@@ -78,17 +96,16 @@ module Api::V1::Assignment
       hash['external_tool_tag_attributes'] = {
         'url' => external_tool_tag.url,
         'new_tab' => external_tool_tag.new_tab,
-        'resource_link_id' => external_tool_tag.opaque_identifier(:asset_string)
+        'resource_link_id' => ContextExternalTool.opaque_identifier_for(external_tool_tag, assignment.shard)
       }
+      hash['url'] = sessionless_launch_url(@context,
+                                           :launch_type => 'assessment',
+                                           :assignment_id => assignment.id)
     end
 
     if assignment.automatic_peer_reviews? && assignment.peer_reviews?
       hash['peer_review_count'] = assignment.peer_review_count
       hash['peer_reviews_assign_at'] = assignment.peer_reviews_assign_at
-    end
-
-    if hash['lock_info']
-      hash['lock_explanation'] = lock_explanation(hash['lock_info'], 'assignment', assignment.context)
     end
 
     if assignment.grants_right?(user, :grade)
@@ -118,6 +135,10 @@ module Api::V1::Assignment
         row_hash["ratings"] = row[:ratings].map do |c|
           c.slice(:id, :points, :description)
         end
+        if row[:learning_outcome_id] && outcome = LearningOutcome.find_by_id(row[:learning_outcome_id])
+          row_hash["outcome_id"] = outcome.id
+          row_hash["vendor_guid"] = outcome.vendor_guid
+        end
         row_hash
       end
       hash['rubric_settings'] = {
@@ -126,7 +147,7 @@ module Api::V1::Assignment
       }
     end
 
-    if include_discussion_topic && assignment.discussion_topic
+    if opts[:include_discussion_topic] && assignment.discussion_topic
       extend Api::V1::DiscussionTopics
       hash['discussion_topic'] = discussion_topic_api_json(
         assignment.discussion_topic,
@@ -135,6 +156,31 @@ module Api::V1::Assignment
         session,
         !:include_assignment)
     end
+
+    if opts[:include_all_dates] && assignment.assignment_overrides
+      hash['all_dates'] = assignment.dates_hash_visible_to(user)
+    end
+
+    if opts[:include_module_ids]
+      thing_in_module = case assignment.submission_types
+                        when "online_quiz" then assignment.quiz
+                        when "discussion_topic" then assignment.discussion_topic
+                        else assignment
+                        end
+      module_ids = thing_in_module.context_module_tags.map &:context_module_id
+      hash['module_ids'] = module_ids
+    end
+
+    if assignment.context.feature_enabled?(:draft_state)
+      hash['published'] = ! assignment.unpublished?
+      hash['unpublishable'] = !assignment.has_student_submissions?
+    end
+
+    if submission = opts[:submission]
+      hash['submission'] = submission_json(submission,assignment,user,session)
+    end
+
+    locked_json(hash, assignment, user, 'assignment')
 
     hash
   end
@@ -177,7 +223,6 @@ module Api::V1::Assignment
     automatic_peer_reviews
     external_tool_tag_attributes
     grade_group_students_individually
-    set_custom_field_values
     turnitin_enabled
     turnitin_settings
     grading_standard_id
@@ -277,6 +322,17 @@ module Api::V1::Assignment
     end
 
     # TODO: allow rubric creation
+
+    if update_params.has_key?("description")
+      update_params["description"] = process_incoming_html_content(update_params["description"])
+    end
+
+    if assignment.context.feature_enabled?(:draft_state)
+      if assignment_params.has_key? "published"
+        published = value_to_boolean(assignment_params['published'])
+        assignment.workflow_state = published ? 'published' : 'unpublished'
+      end
+    end
 
     assignment.updating_user = @current_user
     assignment.attributes = update_params

@@ -20,12 +20,14 @@ class AbstractCourse < ActiveRecord::Base
 
   include Workflow
 
-  attr_accessible :name, :account, :short_name, :enrollment_term
+  attr_accessible :name, :account, :short_name, :enrollment_term, :root_account
   
   belongs_to :root_account, :class_name => 'Account'
   belongs_to :account
   belongs_to :enrollment_term
   has_many :courses
+
+  validates_presence_of :account_id, :root_account_id, :enrollment_term_id, :workflow_state
 
   workflow do
     state :active
@@ -38,9 +40,7 @@ class AbstractCourse < ActiveRecord::Base
     save!
   end
   
-  named_scope :active, lambda {
-    { :conditions => ['abstract_courses.workflow_state != ?', 'deleted'] }
-  }
+  scope :active, where("abstract_courses.workflow_state<>'deleted'")
   
   include StickySisFields
   are_sis_sticky :name, :short_name, :enrollment_term_id

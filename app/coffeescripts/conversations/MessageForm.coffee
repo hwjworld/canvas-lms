@@ -29,7 +29,8 @@ define [
       'resize'
 
     constructor: (@pane, @canAddNotesFor, @options) ->
-      @$form = $(messageFormTemplate(@options))
+      templateOptions = _.extend({}, @options, conversation: @options.conversation?.toJSON())
+      @$form = $(messageFormTemplate(templateOptions))
       @$mediaComment = @$form.find('.media_comment')
       @$mediaCommentId = @$form.find("input[name=media_comment_id]")
       @$mediaCommentType = @$form.find("input[name=media_comment_type]")
@@ -41,14 +42,30 @@ define [
         # since it doesn't infer percentage widths, just whatever the current pixels are
         @tokenInput.$fakeInput.css('width', '100%')
         if @options.user_id
-          @tokenInput.selector.addByUserId(@options.user_id, @options.from_conversation_id)
+          query = { user_id: @options.user_id, from_conversation_id: @options.from_conversation_id }
+          $.ajaxJSON @tokenInput.selector.url, 'GET', query, (data) =>
+            if data.length
+              @tokenInput.addToken
+                value: data[0].id
+                text: data[0].name
+                data: data[0]
+
       @initializeActions()
       if !$(document.activeElement).filter(':input').length and window.location.hash isnt ''
         @$form.find(':input:visible:first').focus()
 
+    setAuthor: (messages, participants) ->
+      @messageList or= messages.reverse()
+      message        = _.find(@messageList, (m) -> m.author_id isnt ENV.current_user_id)
+      return unless message
+      @messageAuthor = _.find(participants, (p) -> p.id == message.author_id)
+
     initializeActions: ->
       if @tokenInput
         @tokenInput.change = @recipientIdsChanged
+
+      $('[type=submit]').on('click', ((e) => @replyToAuthor = true))
+      $('[type=button]').on('click', ((e) => @$form.submit()))
 
       @$form.formSubmit
         fileUpload: => (@$form.find(".file_input:visible").length > 0)
@@ -65,7 +82,14 @@ define [
           data.attachment_ids = (a.attachment.id for a in attachments)
           data
         onSubmit: (@request, data) =>
+          if !@messageAuthor and @pane.app.currentConversation
+            conversation = @pane.app.currentConversation
+            @setAuthor(conversation.messages, conversation.participants)
+          if @options.conversation?.get('beta') and @replyToAuthor
+            data['recipients[]'] = @messageAuthor.id
           @pane.addingMessage(@messageData(data), @request)
+          @replyToAuthor = false
+          true
 
     recipientIdsChanged: (recipientIds) =>
       if recipientIds.length > 1 or recipientIds[0]?.match(/^(course|group)_/)
@@ -85,6 +109,10 @@ define [
         @resize()
         $attachment.remove()
 
+    addToken: (userData) ->
+      input = @$form.find('.recipients').data('token_input')
+      input.addToken(userData) if input
+
     addMediaComment: ->
       @$mediaComment.mediaComment 'create', 'any', (id, type) =>
         @$mediaCommentId.val(id)
@@ -100,7 +128,10 @@ define [
 
     messageData: (data) ->
       numRecipients = if @options.conversation
-        Math.max(@options.conversation.get('audience').length, 1)
+        if data['recipients[]']
+          1
+        else
+          Math.max(@options.conversation.get('audience').length, 1)
       else
         # note: this number may be high, if users appear in multiple of the
         # specified recipient contexts. there's no way of knowing without going
@@ -117,7 +148,7 @@ define [
       for key, enabled of options
         $node = @$form.find(".#{key}_info")
         $node.showIf(enabled)
-        $node.find("input[name=#{key}]").prop('checked', false) unless enabled
+        $node.find("input[type=checkbox][name=#{key}]").prop('checked', false) unless enabled
 
     toggle: (state) ->
       @$form[if state then 'addClass' else 'removeClass']('disabled')

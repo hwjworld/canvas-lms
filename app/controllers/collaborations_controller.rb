@@ -22,13 +22,13 @@
 # @object Collaborator
 #   {
 #     // The unique user or group identifier for the collaborator.
-#     id: 12345,
+#     "id": 12345,
 #
 #     // The type of collaborator (e.g. "user" or "group").
-#     type: "user",
+#     "type": "user",
 #
 #     // The name of the collaborator.
-#     name: "Don Draper"
+#     "name": "Don Draper"
 #   }
 
 class CollaborationsController < ApplicationController
@@ -47,6 +47,7 @@ class CollaborationsController < ApplicationController
     @collaborations = @context.collaborations.active
     log_asset_access("collaborations:#{@context.asset_string}", "collaborations", "other")
     @google_docs = google_docs_verify_access_token rescue false
+    js_env :TITLE_MAX_LEN => Collaboration::TITLE_MAX_LENGTH
   end
 
   def show
@@ -68,21 +69,22 @@ class CollaborationsController < ApplicationController
 
   def create
     return unless authorized_action(@context.collaborations.build, @current_user, :create)
-    users     = User.all(:conditions => { :id => Array(params[:user]) })
+    users     = User.where(:id => Array(params[:user])).all
     group_ids = Array(params[:group])
     params[:collaboration][:user] = @current_user
     @collaboration = Collaboration.typed_collaboration_instance(params[:collaboration].delete(:collaboration_type))
     @collaboration.context = @context
     @collaboration.attributes = params[:collaboration]
-    @collaboration.update_members(users, group_ids)
     respond_to do |format|
       if @collaboration.save
+        # After saved, update the members
+        @collaboration.update_members(users, group_ids)
         format.html { redirect_to @collaboration.url }
-        format.json { render :json => @collaboration.to_json(:methods => [:collaborator_ids], :permissions => {:user => @current_user, :session => session}) }
+        format.json { render :json => @collaboration.as_json(:methods => [:collaborator_ids], :permissions => {:user => @current_user, :session => session}) }
       else
         flash[:error] = t 'errors.create_failed', "Collaboration creation failed"
         format.html { redirect_to named_context_url(@context, :context_collaborations_url) }
-        format.json { render :json => @collaboration.errors.to_json, :status => :bad_request }
+        format.json { render :json => @collaboration.errors, :status => :bad_request }
       end
     end
   end
@@ -90,7 +92,7 @@ class CollaborationsController < ApplicationController
   def update
     @collaboration = @context.collaborations.find(params[:id])
     return unless authorized_action(@collaboration, @current_user, :update)
-    users     = User.all(:conditions => { :id => Array(params[:user]) })
+    users     = User.where(:id => Array(params[:user])).all
     group_ids = Array(params[:group])
     params[:collaboration].delete :collaboration_type
     @collaboration.attributes = params[:collaboration]
@@ -98,11 +100,11 @@ class CollaborationsController < ApplicationController
     respond_to do |format|
       if @collaboration.save
         format.html { redirect_to named_context_url(@context, :context_collaborations_url) }
-        format.json { render :json => @collaboration.to_json(:methods => [:collaborator_ids], :permissions => {:user => @current_user, :session => session}) }
+        format.json { render :json => @collaboration.as_json(:methods => [:collaborator_ids], :permissions => {:user => @current_user, :session => session}) }
       else
         flash[:error] = t 'errors.update_failed', "Collaboration update failed"
         format.html { redirect_to named_context_url(@context, :context_collaborations_url) }
-        format.json { render :json => @collaboration.errors.to_json, :status => :bad_request }
+        format.json { render :json => @collaboration.errors, :status => :bad_request }
       end
     end
   end
@@ -114,7 +116,7 @@ class CollaborationsController < ApplicationController
       @collaboration.destroy
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :collaborations_url) }
-        format.json { render :json => @collaboration.to_json }
+        format.json { render :json => @collaboration }
       end
     end
   end
@@ -123,12 +125,12 @@ class CollaborationsController < ApplicationController
   #
   # Examples
   #
-  #   curl http://<canvas>/api/v1/courses/1/collaborations/1/members
+  #   curl https://<canvas>/api/v1/courses/1/collaborations/1/members
   #
   # @returns [Collaborator]
   def members
     return unless authorized_action(@collaboration, @current_user, :read)
-    collaborators = @collaboration.collaborators.scoped(:include => [:group, :user])
+    collaborators = @collaboration.collaborators.includes(:group, :user)
     collaborators = Api.paginate(collaborators,
                                  self,
                                  api_v1_collaboration_members_url)

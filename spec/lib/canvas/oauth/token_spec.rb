@@ -37,7 +37,7 @@ module Canvas::Oauth
       end
 
       it 'is false when the client id does not match the key id' do
-        stub_out_cache 21
+        stub_out_cache (key.id + 1)
         token.is_for_valid_code?.should be_false
       end
 
@@ -122,8 +122,8 @@ module Canvas::Oauth
       end
     end
 
-    describe '#to_json' do
-      let(:json) { token.to_json }
+    describe '#as_json' do
+      let(:json) { token.as_json }
 
       it 'includes the access token' do
         json['access_token'].should be_a String
@@ -141,7 +141,7 @@ module Canvas::Oauth
 
     describe '.generate_code_for' do
       let(:code) { "brand_new_code" }
-      before { ActiveSupport::SecureRandom.stubs(:hex => code) }
+      before { SecureRandom.stubs(:hex => code) }
 
       it 'returns the new code' do
         Canvas.stubs(:redis => stub(:setex => true))

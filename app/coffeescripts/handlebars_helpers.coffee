@@ -1,4 +1,5 @@
 define [
+  'compiled/util/enrollmentName'
   'vendor/handlebars.vm'
   'i18nObj'
   'jquery'
@@ -12,19 +13,22 @@ define [
   'jquery.instructure_date_and_time'
   'jquery.instructure_misc_helpers'
   'jquery.instructure_misc_plugins'
-], (Handlebars, I18n, $, _, htmlEscape, semanticDateRange, dateSelect, mimeClass, convertApiUserContent, textHelper) ->
+  'translations/_core_en'
+], (enrollmentName, Handlebars, I18n, $, _, htmlEscape, semanticDateRange, dateSelect, mimeClass, convertApiUserContent, textHelper) ->
 
   Handlebars.registerHelper name, fn for name, fn of {
-    t : (key, defaultValue, options) ->
+    t : (translationKey, defaultValue, options) ->
       wrappers = {}
       options = options?.hash ? {}
+      scope = options.scope
+      delete options.scope
       for key, value of options when key.match(/^w\d+$/)
         wrappers[new Array(parseInt(key.replace('w', '')) + 2).join('*')] = value
         delete options[key]
       options.wrapper = wrappers if wrappers['*']
       options.needsEscaping = true
       options = $.extend(options, this) unless this instanceof String or typeof this is 'string'
-      I18n.scoped(options.scope).t(key, defaultValue, options)
+      I18n.scoped(scope).t(translationKey, defaultValue, options)
 
     hiddenIf : (condition) -> " display:none; " if condition
 
@@ -57,6 +61,21 @@ define [
       isoString = $.parseFromISO(isoString) unless isoString.datetime
       isoString.datetime_formatted
 
+    # Strips the time information from the datetime and accounts for the
+    # user's timezone preference.
+    dateString : (isoString) ->
+      return '' unless isoString
+      isoString = $.parseFromISO(isoString) unless isoString.datetime
+      isoString.date_string
+
+
+    # Convert the total amount of minutes into a Hours:Minutes format.
+    minutesToHM : (minutes) ->
+      hours = Math.floor(minutes / 60)
+      real_minutes = minutes % 60
+      real_min_str = (if real_minutes < 10 then "0" + real_minutes else real_minutes)
+      "#{hours}:#{real_min_str}"
+
     # helper for easily creating icon font markup
     addIcon : (icontype) ->
       new Handlebars.SafeString "<i class='icon-#{htmlEscape icontype}'></i>"
@@ -67,10 +86,12 @@ define [
 
     # convert a date to a string, using the given i18n format in the date.formats namespace
     tDateToString : (date = '', i18n_format) ->
+      return '' unless date
       I18n.l "date.formats.#{i18n_format}", date
 
     # convert a date to a time string, using the given i18n format in the time.formats namespace
     tTimeToString : (date = '', i18n_format) ->
+      return '' unless date
       I18n.l "time.formats.#{i18n_format}", date
 
     tTimeHours : (date = '') ->
@@ -97,6 +118,8 @@ define [
       new Handlebars.SafeString convertApiUserContent(html, hash)
 
     newlinesToBreak : (string) ->
+      # Convert a null to an empty string so it doesn't blow up.
+      string ||= ''
       new Handlebars.SafeString htmlEscape(string).replace(/\n/g, "<br />")
 
     not: (arg) -> !arg
@@ -222,9 +245,18 @@ define [
     #                      checked="true"
     #                      name="likes[tacos]"
     #                      class="foo bar" >
-    checkbox : (propertyName, {hash}) ->
+    # you can append a unique string to the id with uniqid:
+    #   if you pass id=someid" and uniqid=true as parameters
+    #   the result is like doing id="someid-{{uniqid}}" inside a manually
+    #   created input tag.
+    checkbox: (propertyName, {hash}) ->
       splitPropertyName = propertyName.split(/\./)
       snakeCase = splitPropertyName.join('_')
+
+      if hash.prefix
+        splitPropertyName.unshift hash.prefix
+        delete hash.prefix
+
       bracketNotation = splitPropertyName[0] + _.chain(splitPropertyName)
                                                 .rest()
                                                 .map((prop) -> "[#{prop}]")
@@ -237,11 +269,23 @@ define [
         name: bracketNotation
       , hash
 
-      unless inputProps.checked
-        value = _.reduce splitPropertyName, ((memo, key) -> memo[key]), this
+      unless inputProps.checked?
+        value = _.reduce(splitPropertyName, ((memo, key) -> memo[key] if memo?), this)
         inputProps.checked = true if value
 
-      attributes = _.map inputProps, (val, key) -> "#{htmlEscape key}=\"#{htmlEscape val}\""
+      for prop in ['checked', 'disabled']
+        if inputProps[prop]
+          inputProps[prop] = prop
+        else
+          delete inputProps[prop]
+      
+      if inputProps.uniqid and inputProps.id  
+        inputProps.id += "-#{Handlebars.helpers.uniqid.call this}"
+      delete inputProps.uniqid
+
+      attributes = for key, val of inputProps when val?
+        "#{htmlEscape key}=\"#{htmlEscape val}\""
+
       new Handlebars.SafeString """
         <input name="#{htmlEscape inputProps.name}" type="hidden" value="0" />
         <input #{attributes.join ' '} />
@@ -249,6 +293,12 @@ define [
 
     toPercentage: (number) ->
       parseInt(100 * number) + "%"
+
+    toPrecision: (number, precision) ->
+      if number
+        parseFloat(number).toPrecision(precision)
+      else
+        ''
 
     checkedIf: ( thing, thingToCompare, hash ) ->
       if arguments.length == 3
@@ -291,9 +341,55 @@ define [
         'disabled'
       else
         ''
+    truncate_left: ( string, max) ->
+       return textHelper.truncateText( string.split("").reverse().join(""), {max: max}).split("").reverse().join("")
 
-    truncate: ( string, max ) ->
-      return textHelper.truncateText( string, { max: max } )
+    truncate: ( string, max) ->
+      return textHelper.truncateText( string, {max: max})
 
+    enrollmentName: enrollmentName
+
+    # Public: Print an array as a comma-separated list.
+    #
+    # separator - The string to separate values with (default: ', ')
+    # propName - If array elements are objects, this is the object property
+    #            that should be printed (default: null).
+    # limit - Only display the first n results of the list, following by "end." (default: null)
+    # end - If the list is truncated, display this string at the end of the list (default: '...').
+    #
+    # Examples
+    #   values = [1,2,3]
+    #   complexValues = [{ id: 1 }, { id: 2 }, { id: 3 }]
+    #   {{list values}} #=> 1, 2, 3
+    #   {{list values separator=";"}} #=> 1;2;3
+    #   {{list complexValues propName="id"}} #=> 1, 2, 3
+    #   {{list values limit=2}} #=> 1, 2...
+    #   {{list values limit=2 end="!"}} #=> 1, 2!
+    #
+    # Returns a string.
+    list: (value, options) ->
+      _.defaults(options.hash, separator: ', ', propName: null, limit: null, end: '...')
+      {propName, limit, end, separator} = options.hash
+      result = _.map value, (item) ->
+        if propName then item[propName] else item
+      result = result.slice(0, limit) if limit
+      string = result.join(separator)
+      if limit and value.length > limit then "#{string}#{end}" else string
+
+    titleize: (str) ->
+      return '' unless str
+      words = str.split(/[ _]+/)
+      titleizedWords = _(words).map (w) -> w[0].toUpperCase() + w.slice(1)
+      titleizedWords.join(' ')
+    
+    uniqid: (context) ->
+      context = @ if arguments.length <= 1
+      unless context._uniqid_
+        chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        context._uniqid_ = (chars.charAt(Math.floor(Math.random() * chars.length)) for [1..8]).join ''
+      return context._uniqid_
   }
+
+  # not a function helper, just a way to make ENV available in any scope
+  Handlebars.helpers.ENV = @ENV
   return Handlebars

@@ -60,7 +60,7 @@ describe WikiPagesController do
 
     it "should retrieve existing entities" do
       course_with_teacher_logged_in(:active_all => true)
-      page = @course.wiki.wiki_page
+      page = @course.wiki.front_page
       page.save!
       get 'show', :course_id => @course.id, :id => 'front-page'
       response.should be_success
@@ -107,9 +107,24 @@ describe WikiPagesController do
       assigns[:wiki].should_not be_nil
       assigns[:page].should_not be_nil
       assigns[:page].title.should eql("Some Secret Page")
+    end
+
+    it "should not allow students when not allowed" do
+      course_with_teacher_logged_in(:active_all => true)
+      post 'create', :course_id => @course.id, :wiki_page => {:title => "Some Secret Page"}
+      response.should be_redirect
+      page = assigns[:page]
+      page.should_not be_nil
+      page.should_not be_new_record
+      page.title.should == "Some Secret Page"
       page.hide_from_students = true
       page.save
       page.reload
+      student = user()
+      enrollment = @course.enroll_student(student)
+      enrollment.accept!
+      @course.reload
+      user_session(student)
       get 'show', :course_id => @course.id, :id => page.wiki_id
       assert_unauthorized
     end
@@ -155,6 +170,16 @@ describe WikiPagesController do
       assigns[:page].should_not be_nil
       assigns[:page].should_not be_new_record
       assigns[:page].title.should eql("Some Great Page")
+    end
+
+    it "should set a page named 'Front Page' as the front page if there isn't one already and draft state is disabled" do
+      account_model
+      @account.disable_feature! :draft_state
+      course_with_teacher_logged_in(:account => @account, :active_all => true)
+      post 'create', :course_id => @course.id, :wiki_page => {:title => "Front Page"}
+      @course.reload
+      @course.wiki.should have_front_page
+      @course.wiki.front_page.id.should == assigns[:page].id
     end
   end
 
@@ -240,7 +265,7 @@ describe WikiPagesController do
   describe "DELETE 'destroy'" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
-      page = @course.wiki.wiki_page
+      page = @course.wiki.front_page
       page.save!
       delete 'destroy', :course_id => @course.id, :id => page.url
       assert_unauthorized
@@ -248,10 +273,10 @@ describe WikiPagesController do
     
     it "should redirect on deleting front page" do
       course_with_teacher_logged_in(:active_all => true)
-      page = @course.wiki.wiki_page
+      page = @course.wiki.front_page
       page.save!
       delete 'destroy', :course_id => @course.id, :id => page.url
-      flash[:error].should eql('You are not permitted to delete that page.')
+      flash[:error].should eql('You cannot delete the front page.')
       response.should be_redirect
     end
     

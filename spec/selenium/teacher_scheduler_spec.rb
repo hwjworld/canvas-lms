@@ -3,12 +3,16 @@ require File.expand_path(File.dirname(__FILE__) + '/helpers/calendar2_common')
 require File.expand_path(File.dirname(__FILE__) + '/helpers/scheduler_common')
 
 describe "scheduler" do
-  it_should_behave_like "calendar2 selenium tests"
-  it_should_behave_like "scheduler selenium tests"
-
+  it_should_behave_like "in-process server selenium tests"
   context "as a teacher" do
 
     before (:each) do
+      Account.default.tap do |a|
+        a.settings[:enable_scheduler] = true
+        a.settings[:show_scheduler]   = true
+        a.settings[:agenda_view]      = true
+        a.save!
+      end
       course_with_teacher_logged_in
       make_full_screen
     end
@@ -43,7 +47,7 @@ describe "scheduler" do
       start_fields = ff('.time-block-list .start_time')
       times = %W(2:00 2:30 3:00 3:30 4:00 4:30 5:00 5:30)
       start_fields.each_with_index do |start_field, i|
-        start_field.attribute(:value).should == times[i] + "PM" unless i == 8
+        start_field.attribute(:value).strip.should == times[i] + "pm" unless i == 8
       end
       f('.ag_contexts_selector').click
       f("#option_course_#{@course.id}").click
@@ -130,21 +134,21 @@ describe "scheduler" do
       }
       # assert options are checked
       open_edit_dialog
-      f('[name="per_slot_option"]').selected?.should be_true
-      f('[name="participant_visibility"]').selected?.should be_true
-      f('[name="max_appointments_per_participant_option"]').selected?.should be_true
+      f('[type=checkbox][name="per_slot_option"]').selected?.should be_true
+      f('[type=checkbox][name="participant_visibility"]').selected?.should be_true
+      f('[type=checkbox][name="max_appointments_per_participant_option"]').selected?.should be_true
 
       # uncheck the options
-      f('[name="per_slot_option"]').click
-      f('[name="participant_visibility"]').click
-      f('[name="max_appointments_per_participant_option"]').click
+      f('[type=checkbox][name="per_slot_option"]').click
+      f('[type=checkbox][name="participant_visibility"]').click
+      f('[type=checkbox][name="max_appointments_per_participant_option"]').click
       submit_dialog('.ui-dialog-buttonset', '.ui-button')
       wait_for_ajaximations
       # assert options are not checked
       open_edit_dialog
-      f('[name="per_slot_option"]').selected?.should be_false
-      f('[name="participant_visibility"]').selected?.should be_false
-      f('[name="max_appointments_per_participant_option"]').selected?.should be_false
+      f('[type=checkbox][name="per_slot_option"]').selected?.should be_false
+      f('[type=checkbox][name="participant_visibility"]').selected?.should be_false
+      f('[type=checkbox][name="max_appointments_per_participant_option"]').selected?.should be_false
     end
 
     it "should delete an appointment group after clicking appointment group link" do
@@ -159,7 +163,7 @@ describe "scheduler" do
     end
 
     it "should send messages to appropriate participants" do
-      gc = @course.group_categories.create!
+      gc = group_category
       ug1 = @course.groups.create!(:group_category => gc)
       ug1.users << student1 = student_in_course(:course => @course, :active_all => true).user
       ug1.users << student2 = student_in_course(:course => @course, :active_all => true).user
@@ -196,8 +200,8 @@ describe "scheduler" do
           set_value(form.find_element(:css, '#body'), 'hello')
           submit_dialog(fj('.ui-dialog:visible'), '.ui-button')
           wait_for_ajaximations
-
-          fj('#message_participants_form').should be_nil # using fj to avoid selenium caching
+          # using fj to avoid selenium caching
+          keep_trying_until { fj('#message_participants_form').should be_nil }
         end
       end
       student1.conversations.first.messages.size.should == 6 # registered/all * 3
@@ -273,13 +277,10 @@ describe "scheduler" do
       wait_for_ajaximations
       ff('#attendees li').size.should == 1
 
-      # make sure the user was really deleted
-      f('#refresh_calendar_link').click
-      wait_for_ajaximations
       fj('.fc-event:visible').click
 
       keep_trying_until { ff('#attendees li').size.should == 1 }
-      f('.single_item_done_button').click
+      f('.scheduler_done_button').click
     end
 
     it "should allow removing individual appointment groups" do
@@ -315,12 +316,9 @@ describe "scheduler" do
       wait_for_ajaximations
       ff('#attendees li').size.should == 1
 
-      # make sure the appointment was really deleted
-      f('#refresh_calendar_link').click
-      wait_for_ajaximations
       fj('.fc-event:visible').click
       ff('#attendees li').size.should == 1
-      f('.single_item_done_button').click
+      f('.scheduler_done_button').click
     end
 
     it "should allow me to create a course with multiple contexts" do
@@ -372,7 +370,7 @@ describe "scheduler" do
       ag.participants_per_appointment.should == 2
 
       open_edit_event_dialog
-      f('[name=max_participants_option]').click
+      f('[type=checkbox][name=max_participants_option]').click
       fj('.ui-button:contains(Update)').click
       wait_for_ajaximations
 

@@ -14,7 +14,11 @@ class UserMerge
     return unless target_user
     return if target_user == from_user
     target_user.save if target_user.changed?
-    target_user.associate_with_shard(from_user.shard)
+    [:strong, :weak, :shadow].each do |strength|
+      from_user.associated_shards(strength).each do |shard|
+        target_user.associate_with_shard(shard, strength)
+      end
+    end
 
     max_position = target_user.communication_channels.last.try(:position) || 0
     to_retire_ids = []
@@ -80,18 +84,20 @@ class UserMerge
       from_user.user_services.delete_all
     else
       from_user.shard.activate do
-        CommunicationChannel.update_all({:workflow_state => 'retired'}, :id => to_retire_ids) unless to_retire_ids.empty?
+        CommunicationChannel.where(:id => to_retire_ids).update_all(:workflow_state => 'retired') unless to_retire_ids.empty?
       end
-      from_user.communication_channels.update_all("user_id=#{target_user.id}, position=position+#{max_position}") unless from_user.communication_channels.empty?
+      from_user.communication_channels.update_all(["user_id=?, position=position+?", target_user, max_position]) unless from_user.communication_channels.empty?
     end
 
-    Shard.with_each_shard(from_user.associated_shards) do
-      max_position = Pseudonym.find(:last, :conditions => { :user_id => target_user.id }, :order => 'position').try(:position) || 0
-      Pseudonym.update_all("position=position+#{max_position}, user_id=#{target_user.id}", :user_id => from_user.id)
+    destroy_conflicting_module_progressions(@from_user, target_user)
+
+    Shard.with_each_shard(from_user.associated_shards + from_user.associated_shards(:weak) + from_user.associated_shards(:shadow)) do
+      max_position = Pseudonym.where(:user_id => target_user).order(:position).last.try(:position) || 0
+      Pseudonym.where(:user_id => from_user).update_all(["user_id=?, position=position+?", target_user, max_position])
 
       to_delete_ids = []
-      target_user_enrollments = Enrollment.find(:all, :conditions => { :user_id => target_user.id })
-      Enrollment.scoped(:conditions => { :user_id => from_user.id }).each do |enrollment|
+      target_user_enrollments = Enrollment.where(:user_id => target_user).all
+      Enrollment.where(:user_id => from_user).each do |enrollment|
         source_enrollment = enrollment
         # non-deleted enrollments should be unique per [course_section, type]
         target_enrollment = target_user_enrollments.detect { |enrollment| enrollment.course_section_id == source_enrollment.course_section_id && enrollment.type == source_enrollment.type && !['deleted', 'inactive', 'rejected'].include?(enrollment.workflow_state) }
@@ -170,8 +176,12 @@ class UserMerge
 
         to_delete_ids << to_delete.id if to_delete && !['deleted', 'inactive', 'rejected'].include?(to_delete.workflow_state)
       end
-      Enrollment.update_all({:workflow_state => 'deleted'}, :id => to_delete_ids) unless to_delete_ids.empty?
-
+      unless to_delete_ids.empty?
+        Enrollment.where(:id => to_delete_ids).update_all(:workflow_state => 'deleted')
+        target_user.communication_channels.email.unretired.each do |cc|
+          Rails.cache.delete([cc.path, 'invited_enrollments'].cache_key)
+        end
+      end
       [
         [:quiz_id, :quiz_submissions],
         [:assignment_id, :submissions]
@@ -181,11 +191,12 @@ class UserMerge
           # on the table, and if both the old user and the new user
           # have a submission for the same assignment there will be
           # a conflict.
-          already_there_ids = table.to_s.classify.constantize.find_all_by_user_id(target_user.id).map(&unique_id)
-          already_there_ids = [0] if already_there_ids.empty?
-          table.to_s.classify.constantize.update_all({:user_id => target_user.id}, "user_id=#{from_user.id} AND #{unique_id} NOT IN (#{already_there_ids.join(',')})")
+          already_there_ids = table.to_s.classify.constantize.where(:user_id => target_user).pluck(unique_id)
+          scope = table.to_s.classify.constantize.where(:user_id => from_user)
+          scope = scope.where("#{unique_id} NOT IN (?)", already_there_ids) unless already_there_ids.empty?
+          scope.update_all(:user_id => target_user)
         rescue => e
-          logger.error "migrating #{table} column user_id failed: #{e.to_s}"
+          Rails.logger.error "migrating #{table} column user_id failed: #{e.to_s}"
         end
       end
       from_user.all_conversations.find_each{ |c| c.move_to_user(target_user) } unless Shard.current != target_user.shard
@@ -208,10 +219,10 @@ class UserMerge
         begin
           klass = table.classify.constantize
           if klass.new.respond_to?("#{column}=".to_sym)
-            klass.connection.execute("UPDATE #{table} SET #{column}=#{target_user.id} WHERE #{column}=#{from_user.id}")
+            klass.where(column => from_user).update_all(column => target_user.id)
           end
         rescue => e
-          logger.error "migrating #{table} column #{column} failed: #{e.to_s}"
+          Rails.logger.error "migrating #{table} column #{column} failed: #{e.to_s}"
         end
       end
 
@@ -221,10 +232,10 @@ class UserMerge
 
         # delete duplicate observers/observees, move the rest
         from_user.user_observees.where(:user_id => target_user.user_observees.map(&:user_id)).delete_all
-        from_user.user_observees.update_all(:observer_id => target_user.id)
+        from_user.user_observees.update_all(:observer_id => target_user)
         xor_observer_ids = (Set.new(from_user.user_observers.map(&:observer_id)) ^ target_user.user_observers.map(&:observer_id)).to_a
         from_user.user_observers.where(:observer_id => target_user.user_observers.map(&:observer_id)).delete_all
-        from_user.user_observers.update_all(:user_id => target_user.id)
+        from_user.user_observers.update_all(:user_id => target_user)
         # for any observers not already watching both users, make sure they have
         # any missing observer enrollments added
         target_user.user_observers.where(:observer_id => xor_observer_ids).each(&:create_linked_enrollments)
@@ -237,6 +248,40 @@ class UserMerge
     from_user.reload
     target_user.touch
     from_user.destroy
+  end
+
+  def destroy_conflicting_module_progressions(from_user, target_user)
+    # there is a unique index on the context_module_progressions table
+    # we need to delete all the conflicting context_module_progressions
+    # without impacting the users module progress and without having to
+    # recalculate the progressions.
+
+    # delete all matching duplicates
+    ContextModuleProgression.
+      where("context_module_progressions.user_id = ?", from_user.id).
+      where("EXISTS (SELECT *
+                     FROM context_module_progressions cmp2
+                     WHERE context_module_progressions.context_module_id=cmp2.context_module_id
+                       AND cmp2.user_id = ?
+                       AND cmp2.workflow_state = context_module_progressions.workflow_state)", target_user.id).delete_all
+
+    # find all the modules that are left and then delete the most restrictive
+    # context_module_progression
+    ContextModuleProgression.
+      where("context_module_progressions.user_id = ?", from_user.id).
+      where("EXISTS (SELECT *
+                     FROM context_module_progressions cmp2
+                     WHERE context_module_progressions.context_module_id=cmp2.context_module_id
+                       AND cmp2.user_id = ?)", target_user.id).find_each do |cmp|
+
+      ContextModuleProgression.
+        where(context_module_id: cmp.context_module_id, user_id: [from_user, target_user]).
+        order("CASE WHEN workflow_state = 'Completed' THEN 0
+                    WHEN workflow_state = 'Started' THEN 1
+                    WHEN workflow_state = 'Unlocked' THEN 2
+                    WHEN workflow_state = 'Locked' THEN 3
+                END DESC").first.destroy
+    end
   end
 
 end

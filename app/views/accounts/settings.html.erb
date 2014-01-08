@@ -4,6 +4,15 @@
   js_bundle :account_settings
   jammit_css :account_settings, :reports, :tinymce
   content_for :page_title, t(:page_title, "Account Settings")
+  if can_do(@context, @current_user, :manage_storage_quotas)
+    js_env :ACCOUNT => {
+      'id' => @context.id,
+      'default_storage_quota_mb' => @context.default_storage_quota_mb,
+      'default_user_storage_quota_mb' => @context.default_user_storage_quota_mb,
+      'default_group_storage_quota_mb' => @context.default_group_storage_quota_mb,
+      'site_admin' => @account.site_admin?
+    }
+  end
 %>
 
 <% content_for :right_side do %>
@@ -26,8 +35,13 @@
 <div id="account_settings_tabs" style="display:none;" class="ui-tabs-minimal">
   <ul>
     <% if can_do(@context, @current_user, :manage_account_settings) %>
-    <li><a href="#tab-settings"><%= t(:tab_settings, "Settings") %></a></li>
-    <li><a href="#tab-notifications"><%= t(:tab_notifications, "Notifications") %></a></li>
+    <li><a href="#tab-settings" id="tab-settings-link"><%= t(:tab_settings, "Settings") %></a></li>
+    <% end %>
+    <% if can_do(@context, @current_user, :manage_storage_quotas) %>
+    <li><a href="#tab-quotas" id="tab-quotas-link"><%= t(:tab_quotas, "Quotas") %></a></li>
+    <% end %>
+    <% if can_do(@context, @current_user, :manage_account_settings) %>
+    <li><a href="#tab-notifications" id="tab-notifications-link"><%= t(:tab_notifications, "Notifications") %></a></li>
     <% end %>
     <li><a href="#tab-users" id="tab-users-link"><%= t(:tab_admins, "Admins") %></a></li>
     <% if @account.root_account? %>
@@ -37,15 +51,18 @@
       <li><a href="#tab-reports" id="tab-reports-link"><%= t(:tab_reports, "Reports") %></a></li>
     <% end %>
     <% if can_do(@context, @current_user, :manage_account_settings) %>
-      <li><a href="#tab-tools" id="tab-tools-link"><%= t(:tab_external_tools, "External Tools") %></a></li>
+      <li><a href="#tab-tools" id="tab-tools-link"><%= t(:tab_external_tools, "Apps") %></a></li>
     <% end %>
     <% if @context.root_account.settings[:enable_alerts] && can_do(@context, @current_user, :manage_interaction_alerts) %>
       <li><a href="#tab-alerts" id="tab-alerts-link"><%= t(:tab_alerts, "Alerts") %></a></li>
     <% end %>
+    <% if can_do(@context, @current_user, :manage_feature_flags) %>
+      <li><a href="#tab-features" id="tab-features-link"><%= t(:feature_options, "Feature options") %></a></li>
+    <% end %>
   </ul>
   <% if can_do(@context, @current_user, :manage_account_settings) %>
     <div id="tab-settings">
-      <% form_for :account, :url => account_url(@account), :html => {:method => :put, :id => "account_settings"} do |f| %>
+      <%= form_for :account, :url => account_url(@account), :html => {:method => :put, :id => "account_settings", :class => 'account_settings'} do |f| %>
         <fieldset id="account_settings" class="">
           <legend><%= t(:account_settings_title, "Account Settings") %></legend>
           <table class="formtable">
@@ -67,31 +84,18 @@
                 </td>
               </tr>
             <% end %>
-            <tr>
-              <td>
-                <%= f.blabel :default_course_storage_quota, :en => "Default Course File Quota" %>
-              </td>
-              <td><%= t(:megabytes_field, "%{text_field} megabytes", :text_field => f.text_field(:default_storage_quota_mb, :id => 'account_default_course_storage_quota', :style => "width: 50px;", :title => t(:megabytes_tooltip, "megabytes"))) %></td>
-            </tr>
-            <% if @account.root_account? && !@account.site_admin? %>
-            <tr>
-              <td>
-                <%= f.blabel :default_user_storage_quota, :en => "Default User File Quota" %>
-              </td>
-              <td><%= t(:megabytes_field, "%{text_field} megabytes", :text_field => f.text_field(:default_user_storage_quota_mb, :id => 'account_default_user_storage_quota', :style => "width: 50px;", :title => t(:megabytes_tooltip, "megabytes"))) %></td>
-            </tr>
-            <% end %>
             <% if available_locales.size > 1 %>
             <tr>
               <td><%= f.blabel :default_locale, :default_language, :en => "Default Language" %></td>
               <td>
                 <% no_language = t(:no_language_preference, "Not set (defaults to %{language})", :language => available_locales[infer_locale(:context => @context.parent_account)]) %>
-                <%= f.select :default_locale, [[no_language, nil]] + available_locales.invert.sort, :selected => @context.default_locale %>
-                <span class="unbreakable"><%= mt :transifex_message, <<-TEXT, :transifex_url => "https://www.transifex.com/projects/p/canvas-lms/"
+                <%= f.select :default_locale, [[no_language, nil]] + available_locales.invert.sort, {:selected => @context.default_locale}, {:class => 'locale'} %>
+                <%= render :partial => 'shared/locale_warning' %>
+                <p class="unbreakable"><%= mt :transifex_message, <<-TEXT, :transifex_url => "https://www.transifex.com/projects/p/canvas-lms/"
 Join the [Canvas Translation Community](%{transifex_url})
 TEXT
                 %>
-                </span>
+                </p>
                 <p style="font-size: 0.9em;"><%= t(:default_language_description, "This will override any browser/OS language settings. Preferred languages can still be set at the course/user level.") %></p>
               </td>
             </tr>
@@ -103,8 +107,8 @@ TEXT
                   <%= f.time_zone_select :default_time_zone, ActiveSupport::TimeZone.us_zones %>
                 </td>
               </tr>
-              <% f.fields_for :settings do |settings| %>
-                <% if Account.site_admin.grants_right?(@current_user, :manage_site_settings) %>
+              <%= f.fields_for :settings do |settings| %>
+                <% if @account.grants_right?(@current_user, :manage_site_settings) %>
                   <tr>
                     <td><%= settings.blabel :mfa_settings, :en => "Multi-Factor Authentication" %></td>
                     <td><%= settings.select :mfa_settings, [[t('select.mfa.disabled', "Disabled"), :disabled],
@@ -135,12 +139,32 @@ TEXT
                     <%= settings.label :allow_sending_scores_in_emails, :en => "Students can opt-in to receiving scores in email notifications" %>
                     </td>
                   </tr>
+                  <tr>
+                    <td colspan="2"><%= settings.check_box :restrict_student_future_view, :checked => @account.settings[:restrict_student_future_view] %>
+                      <%= settings.label :restrict_student_future_view, :en => "Restrict students from viewing courses before start date" %>
+                    </td>
+                  </tr>
                 <% end %>
               <% end %>
             <% end %>
           </table>
         </fieldset>
+
         <%= render :partial => 'additional_settings' %>
+
+        <% if !@account.site_admin? &&
+               @account.root_account? &&
+               @account.feature_enabled?(:google_docs_domain_restriction) &&
+               @account.grants_right?(@current_user, :manage_site_settings) %>
+          <fieldset id="google-docs-domain">
+            <legend><%= t(:google_docs_domain, 'Allowed Google Docs Domain') %></legend>
+
+            <%= f.fields_for :settings do |settings| %>
+              <%= settings.label      :google_docs_domain, t('labels.domain', 'Domain:') %>
+              <%= settings.text_field :google_docs_domain, placeholder: 'gmail.com', value: @account.settings[:google_docs_domain] %>
+            <% end %>
+          </fieldset>
+        <% end %>
 
         <% unless @account.site_admin? %>
           <fieldset>
@@ -178,12 +202,16 @@ TEXT
 
         <fieldset>
           <legend><%= t(:features_title, "Features") %></legend>
-          <% f.fields_for :settings do |settings| %>
+          <%= f.fields_for :settings do |settings| %>
             <% if @account.root_account? %>
-              <% if Account.site_admin.grants_right?(@current_user, :manage_site_settings) %>
+              <% if @account.grants_right?(@current_user, :manage_site_settings) %>
                 <div>
                   <%= settings.check_box :admins_can_change_passwords, :checked => @account.settings[:admins_can_change_passwords] == true %>
                   <%= settings.label :admins_can_change_passwords, :en => "Password setting by admins" %>
+                </div>
+                <div>
+                  <%= settings.check_box :admins_can_view_notifications, :checked => @account.settings[:admins_can_view_notifications] %>
+                  <%= settings.label :admins_can_view_notifications, :en => "Admins can view notifications" %>
                 </div>
                 <% unless @account.site_admin? %>
                   <div>
@@ -232,6 +260,10 @@ TEXT
               <% end %>
               <% if @account.canvas_authentication? %>
                 <div>
+                  <%= settings.check_box :self_registration, :checked => @account.self_registration? %>
+                  <%= settings.label :self_registration, :en => "Self Registration" %>
+                </div>
+                <div>
                   <%= settings.check_box :open_registration, :checked => @account.open_registration? %>
                   <%= settings.label :open_registration, :en => "Open Registration" %>
                   <% if @account.delegated_authentication? %>
@@ -272,8 +304,8 @@ TEXT
               </div>
              <% end %>
           <% end %>
-          <% f.fields_for :services do |services| %>
-            <% Account.services_exposed_to_ui_hash(:setting).sort_by { |k,h| h[:name] }.each do |key, service| %>
+          <%= f.fields_for :services do |services| %>
+            <% Account.services_exposed_to_ui_hash(:setting, @current_user, @account).sort_by { |k,h| Canvas::ICU.collation_key(h[:name]) }.each do |key, service| %>
               <div>
                 <%= services.check_box key, :checked => @account.service_enabled?(key) %>
                 <%= services.label key, service[:name] + " " %>
@@ -285,7 +317,7 @@ TEXT
         <fieldset id="account_settings_global_includes_settings" style="<%= hidden unless @account.allow_global_includes? %>">
           <legend><%= t(:global_js_and_css_includes_title, "Global JavaScript and CSS Includes") %></legend>
           <p style="font-size: 0.9em;"><%= t(:global_js_and_css_includes_description, "These files will be included on all page loads for your account") %></p>
-          <% f.fields_for :settings do |settings| %>
+          <%= f.fields_for :settings do |settings| %>
             <table class="formtable">
               <tr>
                 <td><%= settings.blabel :global_javascript, :en => "Global JavaScript URL" %></td>
@@ -303,15 +335,16 @@ TEXT
           <% end %>
         </fieldset>
 
-        <% if @account.root_account? && !@account.site_admin? && Setting.get_cached("show_feedback_link", "false") == "true"  %>
+        <% if @account.root_account? && !@account.site_admin? && Setting.get("show_feedback_link", "false") == "true"  %>
           <fieldset>
             <legend><%= t(:custom_links_to_include_in_the_help_dialog_popup, "Custom Links to include in the help dialog popup") %></legend>
             <p style="font-size: 0.9em;"><%= t(:if_you_would_like_to_link_to_your_own_campus_support_website_in_the_help_dialog_you_can_do_that_here, "If you would like to link to your own campus support website in the help dialog you can do that here") %></p>
-            <% f.fields_for :custom_help_links do |custom_help_links, i| %>
+            <%= f.fields_for :custom_help_links do |custom_help_links, i| %>
               <div id="custom_help_links">
                 <% ((@account.settings[:custom_help_links] || []) << {}).each_with_index do |help_link, i| %>
                   <div class="custom_help_link <%= raw ' blank" style="display: none;' if help_link.empty? %>">
                     <a href="#" class="delete" title="<%= t(:delete, "delete") %>">&nbsp;</a>
+                    <input type="hidden" name="account[custom_help_links][<%= i %>][state]" value="<%= help_link[:state] || 'active' %>" id="custom_help_links_<%= i %>_state" class="custom_help_link_state"/>
                     <table class="formtable">
                       <tr>
                         <td><label for="custom_help_links_<%= i %>_text"><%= before_label :help_link_text, "Text to display for link" %></label></td>
@@ -353,7 +386,7 @@ TEXT
         <% unless @account.site_admin? %>
           <fieldset id="enable_equella_settings" style="display: none;">
             <legend><%= t(:equella_settings_title, "Equella Settings") %></legend>
-            <% f.fields_for :settings do |settings| %>
+            <%= f.fields_for :settings do |settings| %>
               <table class="formtable">
                 <tr>
                   <td style="vertical-align: top;"><%= settings.label :equella_endpoint, :en => "Equella Endpoint" %></td>
@@ -382,9 +415,15 @@ TEXT
                 <td><%= f.text_field :turnitin_shared_secret, :class => "turnitin_account_settings" %></td>
               </tr>
               <tr>
+                <td><%= f.blabel :turnitin_host, :en => "Turnitin Host" %></td>
+                <td><%= f.text_field :turnitin_host, :class => "turnitin_account_settings", :placeholder => "api.turnitin.com" %></td>
+              </tr>
+              <tr>
                 <td>&nbsp;</td>
                 <td>
-                  <a href="<%= account_turnitin_confirmation_path(@account.id, "{{ account_id }}", "{{ shared_secret }}") %>" class="confirm_turnitin_settings_link btn"><%= t(:confirm_turnitin_settings_link, "confirm Turnitin settings") %></a>
+                  <a href="<%= account_turnitin_confirmation_path(@account) %>" class="confirm_turnitin_settings_link btn">
+                    <%= t(:confirm_turnitin_settings_link, "confirm Turnitin settings") %>
+                  </a>
                 </td>
               </tr>
               <tr>
@@ -405,11 +444,11 @@ TEXT
           </fieldset>
         <% end %>
 
-        <% if @account.root_account? and not Account.services_exposed_to_ui_hash(:service).empty? %>
+        <% if @account.root_account? and not (exposed_services = Account.services_exposed_to_ui_hash(:service, @current_user)).empty? %>
           <fieldset>
             <legend><%= t(:enabled_web_serices_title, "Enabled Web Services") %></legend>
-            <% f.fields_for :services do |services| %>
-              <% Account.services_exposed_to_ui_hash(:service).sort_by { |k,h| h[:name] }.each do |key, service| %>
+            <%= f.fields_for :services do |services| %>
+              <% exposed_services.sort_by { |k,h| Canvas::ICU.collation_key(h[:name]) }.each do |key, service| %>
                 <div>
                   <%= services.check_box key, :checked => @account.service_enabled?(key) %>
                   <%= services.label key, service[:name] + " " %>
@@ -442,7 +481,7 @@ TEXT
           <fieldset>
             <legend><%= t(:create_courses_title, "Who Can Create New Courses") %></legend>
             <div style="font-size: 0.8em;"><%= t(:create_courses_description, "(Account Administrators can always create courses)") %></div>
-            <% f.fields_for :settings do |settings| %>
+            <%= f.fields_for :settings do |settings| %>
               <div>
                 <%= settings.check_box :teachers_can_create_courses, :checked => @account.teachers_can_create_courses? %>
                 <%= settings.label :teachers_can_create_courses, :en => "Teachers" %>
@@ -466,14 +505,18 @@ TEXT
     </div>
   <% end %>
 
+  <% if can_do(@context, @current_user, :manage_storage_quotas) %>
+    <div id="tab-quotas"></div>
+  <% end %>
+
   <% if can_do(@context, @current_user, :manage_account_settings) %>
     <div id="tab-notifications">
-      <% form_for :account, :url => account_url(@account), :html => {:method => :put, :id => "account_settings_notifications"} do |f| %>
+      <%= form_for :account, :url => account_url(@account), :html => {:method => :put, :id => "account_settings_notifications"} do |f| %>
 
         <% if @account.root_account? && !@account.site_admin? %>
           <h2><%= t(:email_notification_from_settings, 'E-mail Notification "From" Settings') %></h2>
           <p><%= t(:email_notification_from_description, "This setting allows the Admin to brand or label the 'From' text on all notifications sent from Canvas for this Account.") %></p>
-          <% f.fields_for :settings do |settings| %>
+          <%= f.fields_for :settings do |settings| %>
             <div>
               <%= settings.radio_button :outgoing_email_default_name_option, 'default',
                                         :checked => @account.settings[:outgoing_email_default_name].blank?,
@@ -587,7 +630,7 @@ TEXT
     <% if can_do(@context, @current_user, :manage_account_memberships) %>
       <% js_bundle :user_lists %>
       <a href="#" class="add_users_link btn btn-primary"><i class="icon-add"></i> <%= t('links.add_admins', %{Add Account Admins}) %></a>
-      <% form_tag account_add_account_user_url(@account), {:id => "enroll_users_form", :style => "display: none;"} do  %>
+      <%= form_tag account_add_account_user_url(@account), {:id => "enroll_users_form", :style => "display: none;"} do  %>
         <h2><%= t(:add_admin_title, "Add Account Admins") %></h2>
         <div style="margin-top: 5px;">
           <div>
@@ -638,6 +681,16 @@ TEXT
               </span>&nbsp;&nbsp;
               <%= link_to(context_user_name(@account, announcement.user_id), user_path(announcement.user_id)) %>
             </div>
+            <% if announcement.required_account_service %>
+              <div>
+                <%= Account.allowable_services[announcement.required_account_service.to_sym].try(:[], :name) %>
+              </div>
+            <% end %>
+            <% if announcement.months_in_display_cycle %>
+              <div>
+                <%= t :announcement_sent_to_subset, "Sent to 1 / %{denominator} users each month", denominator: announcement.months_in_display_cycle %>
+              </div>
+            <% end %>
             <div class="message user_content">
               <%= user_content(announcement.message) %>
             </div>
@@ -646,7 +699,7 @@ TEXT
       </ul>
       <% if can_do(@account, @current_user, :manage_alerts) %>
         <a href="#" class="btn btn-primary element_toggler" role="button" data-hide-while-target-shown="true" aria-controls="add_notification_form"><i class="icon-add"></i> <%= t(:add_announcement_link, "Add a New Announcement") %></a>
-        <% form_for :account_notification, :url => account_account_notifications_url(@account), :html => {:id => "add_notification_form", :style => 'display: none;', :class => 'well', :role => "region" } do |f| %>
+        <%= form_for :account_notification, :url => account_account_notifications_url(@account), :html => {:id => "add_notification_form", :style => 'display: none;', :class => 'well', :role => "region" } do |f| %>
           <table class="formtable">
             <tr>
               <td><%= f.blabel :subject, :en => "Subject" %></td>
@@ -668,7 +721,21 @@ TEXT
                   <option value="calendar" class="calendar"><%= t(:alert_icon_calendar_option, "calendar") %></option>
                 </select>
               </td>
-            </tr><tr>
+            </tr>
+            <% if @account.site_admin? %>
+              <tr id="confirm_global_announcement_field">
+                <td colspan=2><input type="checkbox" id="confirm_global_announcement" name="confirm_global_announcement"> <%= label_tag :confirm_global_announcement, t(:confirm_global_announcement, "This announcement will be shown to *all* Canvas users. Confirm that you want to create it.", :wrapper => '<b>\1</b>') %></td>
+              </tr>
+              <tr>
+                <td colspan=2>
+                  <div id="survey_announcement_field">
+                    <%# don't use the rails check_box helper here, because we don't want the extra hidden element when not checked %>
+                    <input type="checkbox" name="account_notification[required_account_service]" id="account_notification_required_account_service" value="account_survey_notifications" />
+                    <label><%= t :survey_announcement, "This is a survey announcement. It will be sent to 1 / %{denominator} of users in enabled accounts for each month that it's active.", denominator: f.text_field(:months_in_display_cycle, value: AccountNotification.default_months_in_display_cycle, disabled: true) %></label>
+                  </label>
+              </tr>
+            <% end %>
+            <tr>
               <td><%= f.blabel :message, :en => "Message" %></td>
             </tr>
           </table>
@@ -721,7 +788,9 @@ TEXT
                 <% if extra_text %>
                   (<%= extra_text %>)
                 <% end %>
-                <%= link_to "<i class='icon-download'></i>".html_safe, context_url(last_complete.account, :context_file_download_url, last_complete.attachment.id) %>
+                <% if last_complete.workflow_state == 'complete' %>
+                  <%= link_to "<i class='icon-download'></i>".html_safe, context_url(last_complete.account, :context_file_download_url, last_complete.attachment.id) %>
+                <% end %>
               <% else %>
                 <%= t 'report_last_run_never', 'Never' %>
               <% end %>
@@ -730,13 +799,12 @@ TEXT
               <% if parameters_partial %>
                 <div style="display: none">
                   <div class="report_dialog">
-                    <form id="<%= report %>_form" class="run_report_form" action="<%= account_run_report_path %>">
+                    <form id="<%= report %>_form" class="run_report_form" action="<%= api_v1_account_create_report_path(@account, report) %>">
                       <div class="report_parameters">
                         <%= render :partial => parameters_partial if parameters_partial %>
                       </div>
                       <br />
-                      <input type="hidden" name="report_type" value="<%= report %>" />
-                        <a href="#" id="run_<%= report %>" class="btn btn-primary btn-small run_report_link"><%= t 'links.run_report', 'Run Report' %></a>
+                      <a href="#" id="run_<%= report %>" class="btn btn-primary btn-small run_report_link"><%= t 'links.run_report', 'Run Report' %></a>
                     </form>
                   </div>
                 </div>
@@ -745,8 +813,7 @@ TEXT
                 </span>
                 <a href="#" id="configure_<%= report %>" style="<%= hidden if in_progress %>" class="btn btn-small configure_report_link"><%= t 'links.configure_report', 'Configure...' %></a>
               <% else %>
-                <form id="<%= report %>_form" class="run_report_form" action="<%= account_run_report_path %>">
-                  <input type="hidden" name="report_type" value="<%= report %>" />
+                <form id="<%= report %>_form" class="run_report_form" action="<%= api_v1_account_create_report_path(@account, report) %>">
                   <span class="running_report_message" style="<%= hidden unless in_progress %>">
                     <%= t('report_running', 'The report is running.*You\'ll receive an email when it is done.*', :wrapper => '<div>\1</div>') %>
                   </span>
@@ -761,7 +828,6 @@ TEXT
   <% end %>
   <% if can_do(@context, @current_user, :manage_account_settings) %>
       <div id="tab-tools">
-        <h2><%= t(:external_tools_title, "External Tools") %></h2>
         <%= render :partial => 'external_tools/external_tools', :object => @context.context_external_tools.active %>
       </div>
   <% end %>
@@ -770,5 +836,8 @@ TEXT
         <h2><%= t(:alerts_title, "Alerts") %></h2>
         <%= render :partial => 'alerts/alerts' %>
       </div>
+  <% end %>
+  <% if can_do(@context, @current_user, :manage_feature_flags) %>
+    <div id="tab-features"></div>
   <% end %>
 </div>

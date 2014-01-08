@@ -25,7 +25,8 @@ class ContentExport < ActiveRecord::Base
   has_many :attachments, :as => :context, :dependent => :destroy
   has_a_broadcast_policy
   serialize :settings
-  attr_accessible
+  attr_accessible :course
+  validates_presence_of :course_id, :workflow_state
 
   alias_method :context, :course
 
@@ -114,12 +115,12 @@ class ContentExport < ActiveRecord::Base
   #   checked should be exported or not. 
   #
   #   Returns: bool
-  def export_object?(obj)
+  def export_object?(obj, asset_type=nil)
     return false unless obj
     return true if selected_content.empty?
     return true if is_set?(selected_content[:everything])
 
-    asset_type = obj.class.table_name
+    asset_type ||= obj.class.table_name
     return true if is_set?(selected_content["all_#{asset_type}"])
 
     return false unless selected_content[asset_type]
@@ -178,16 +179,17 @@ class ContentExport < ActiveRecord::Base
   end
   
   def fast_update_progress(val)
+    content_migration.update_conversion_progress(val) if content_migration
     self.progress = val
-    ContentExport.update_all({:progress=>val}, "id=#{self.id}")
+    ContentExport.where(:id => self).update_all(:progress=>val)
   end
   
-  named_scope :active, {:conditions => ['workflow_state != ?', 'deleted']}
-  named_scope :not_for_copy, {:conditions => ['workflow_state != ?', 'exported_for_course_copy']}
-  named_scope :common_cartridge, {:conditions => ['export_type == ?', COMMON_CARTRIDGE]}
-  named_scope :qti, {:conditions => ['export_type == ?', QTI]}
-  named_scope :course_copy, {:conditions => ['export_type == ?', COURSE_COPY]}
-  named_scope :running, {:conditions => ['workflow_state IN (?)', ['created', 'exporting']]}
+  scope :active, where("workflow_state<>'deleted'")
+  scope :not_for_copy, where("workflow_state<>'exported_for_course_copy'")
+  scope :common_cartridge, where(:export_type => COMMON_CARTRIDGE)
+  scope :qti, where(:export_type => QTI)
+  scope :course_copy, where(:export_type => COURSE_COPY)
+  scope :running, where(:workflow_state => ['created', 'exporting'])
 
   private
 

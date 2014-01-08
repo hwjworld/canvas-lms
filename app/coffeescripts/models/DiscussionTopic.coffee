@@ -1,11 +1,12 @@
 define [
+  'i18n!discussion_topics'
   'Backbone'
   'jquery'
   'underscore'
   'compiled/collections/ParticipantCollection'
   'compiled/collections/DiscussionEntriesCollection'
   'compiled/models/Assignment'
-], (Backbone, $, _, ParticipantCollection, DiscussionEntriesCollection, Assignment) ->
+], (I18n, Backbone, $, _, ParticipantCollection, DiscussionEntriesCollection, Assignment) ->
 
   class DiscussionTopic extends Backbone.Model
     resourceName: 'discussion_topics'
@@ -16,6 +17,11 @@ define [
       podcast_has_student_posts: false
       require_initial_post: false
       is_announcement: false
+      subscribed: false
+      user_can_see_posts: true
+      subscription_hold: null
+      publishable: true
+      unpublishable: true
 
     dateAttributes: [
       'last_reply_at'
@@ -31,27 +37,76 @@ define [
       @entries.participants = @participants
 
       @set 'set_assignment', @get('assignment')?
-      assign = new Assignment(@get('assignment') or {})
+      assign_attributes = @get('assignment') or {}
+      assign_attributes.assignment_overrides or= []
+      assign_attributes.turnitin_settings or= {}
+      assign = new Assignment(assign_attributes)
       assign.alreadyScoped = true
       @set 'assignment', assign
+      @set 'publishable',  @get('can_unpublish')
+      @set 'unpublishable', @get('can_unpublish')
 
     # always include assignment in view presentation
     present: =>
       Backbone.Model::toJSON.call(this)
 
+    publish: ->
+      @updateOneAttribute('published', true)
+
+    unpublish: ->
+      @updateOneAttribute('published', false)
+
+    disabledMessage: -> I18n.t 'cannot_unpublish_with_replies', "Can't unpublish if there are replies"
+
+    topicSubscribe: ->
+      baseUrl = _.result this, 'url'
+      @set 'subscribed', true
+      $.ajaxJSON "#{baseUrl}/subscribed", 'PUT'
+
+    topicUnsubscribe: ->
+      baseUrl = _.result this, 'url'
+      @set 'subscribed', false
+      $.ajaxJSON "#{baseUrl}/subscribed", 'DELETE'
+
     toJSON: ->
       json = super
-      unless json.set_assignment
-        delete json.assignment
-      json
+      delete json.assignment unless json.set_assignment
+      assignment = if json.assignment
+        if typeof json.assignment.toJSON is 'function'
+          json.assignment.toJSON()
+        else
+          json.assignment
+      else
+        null
+
+      _.extend json,
+        summary: @summary(),
+        unread_count_tooltip: @unreadTooltip(),
+        reply_count_tooltip: @replyTooltip()
+        assignment: assignment
+
+    unreadTooltip: ->
+      I18n.t 'unread_count_tooltip', {
+        zero:  'No unread replies'
+        one:   '1 unread reply'
+        other: '%{count} unread replies'
+      }, count: @get('unread_count')
+
+    replyTooltip: ->
+      I18n.t 'reply_count_tooltip', {
+        zero:  'No replies'
+        one:   '1 reply'
+        other: '%{count} replies'
+      }, count: @get('discussion_subentry_count')
 
     ##
     # this is for getting the topic 'full view' from the api
-    # see: http://<canvas>/doc/api/discussion_topics.html#method.discussion_topics_api.view
+    # see: https://<canvas>/doc/api/discussion_topics.html#method.discussion_topics_api.view
     fetchEntries: ->
       baseUrl = _.result this, 'url'
-      $.get "#{baseUrl}/view", ({unread_entries, participants, view: entries}) =>
+      $.get "#{baseUrl}/view", ({unread_entries, forced_entries, participants, view: entries}) =>
         @unreadEntries = unread_entries
+        @forcedEntries = forced_entries
         @participants.reset participants
 
         # TODO: handle nested replies and 'new_entries' here

@@ -36,13 +36,13 @@ describe UsersController do
 
     it "should count conversations as interaction" do
       get user_student_teacher_activity_url(@teacher, @e1.user)
-      Nokogiri::HTML(response.body).at_css('table.report tr:first td:nth(2)').text.should match(/never/)
+      Nokogiri::HTML(response.body).at_css('table.report tbody tr:first td:nth(2)').text.should match(/never/)
 
       @conversation = Conversation.initiate([@e1.user, @teacher], false)
       @conversation.add_message(@teacher, "hello")
 
       get user_student_teacher_activity_url(@teacher, @e1.user)
-      Nokogiri::HTML(response.body).at_css('table.report tr:first td:nth(2)').text.should match(/less than 1 day/)
+      Nokogiri::HTML(response.body).at_css('table.report tbody tr:first td:nth(2)').text.should match(/less than 1 day/)
     end
 
     it "should only include students the teacher can view" do
@@ -121,16 +121,6 @@ describe UsersController do
       get account_users_url(Account.default)
       response.should be_success
       response.body.should match /Olds, JT.*St\. Clair, John/m
-    end
-
-    it "should not show student view student in a course context" do
-      course_with_teacher_logged_in(:active_all => true)
-      @fake_student = @course.student_view_student
-
-      get course_users_url @course.id
-      body = Nokogiri::HTML(response.body)
-      body.css("#user_#{@fake_student.id}").should be_empty
-      body.at_css('.student_roster').text.should_not match(/Test Student/)
     end
 
     it "should not show any student view students at the account level" do

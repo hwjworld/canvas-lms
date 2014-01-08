@@ -6,9 +6,11 @@ define [
   'jst/registration/teacherDialog'
   'jst/registration/studentDialog'
   'jst/registration/parentDialog'
+  'compiled/util/addPrivacyLinkToDialog'
+  'compiled/jquery/validate'
   'jquery.instructure_forms'
   'jquery.instructure_date_and_time'
-], (_, I18n, preventDefault, registrationErrors, teacherDialog, studentDialog, parentDialog) ->
+], (_, I18n, preventDefault, registrationErrors, teacherDialog, studentDialog, parentDialog, addPrivacyLinkToDialog) ->
 
   $nodes = {}
   templates = {teacherDialog, studentDialog, parentDialog}
@@ -17,9 +19,10 @@ define [
     return unless templates[id]
     $node = $nodes[id] ?= $('<div />')
     $node.html templates[id](
-      hiddenFields: ENV.HIDDEN_FIELDS || []
-      terms_url: "http://www.instructure.com/terms-of-use"
-      privacy_url: "http://www.instructure.com/privacy-policy"
+      account: ENV.ACCOUNT.registration_settings
+      terms_required: ENV.ACCOUNT.terms_required
+      terms_url: ENV.ACCOUNT.terms_of_use_url
+      privacy_url: ENV.ACCOUNT.privacy_policy_url
     )
     $node.find('.date-field').datetime_field()
 
@@ -28,21 +31,16 @@ define [
       signupDialog($(this).data('template'), $(this).prop('title'))
 
     $form = $node.find('form')
-    promise = null
     $form.formSubmit
-      beforeSubmit: ->
-        promise = $.Deferred()
-        $form.disableWhileLoading(promise)
+      required: (el.name for el in $form.find(':input[name]').not('[type=hidden]'))
+      disableWhileLoading: 'spin_on_success'
+      errorFormatter: registrationErrors
       success: (data) =>
         # they should now be authenticated (either registered or pre_registered)
         if data.course
           window.location = "/courses/#{data.course.course.id}?registration_success=1"
         else
           window.location = "/?registration_success=1"
-      formErrors: false
-      error: (errors) ->
-        promise.reject()
-        $form.formErrors registrationErrors(errors)
 
     $node.dialog
       resizable: false
@@ -53,3 +51,8 @@ define [
         $(this).find(':input').eq(0).focus()
       close: -> $('.error_box').filter(':visible').remove()
     $node.fixDialogButtons()
+    unless ENV.ACCOUNT.terms_required # term verbiage has a link to PP, so this would be redundant
+      addPrivacyLinkToDialog($node)
+
+  signupDialog.templates = templates
+  signupDialog

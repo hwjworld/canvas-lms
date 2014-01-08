@@ -4,6 +4,8 @@
   content_for :page_title, join_title(t(:page_title, "Grades for %{student}", :student => @presenter.student_name), @context.name)
 %>
 
+<h1 class="screenreader-only"><%= t(:page_title, "Grades for %{student}", :student => @presenter.student_name) %></h1>
+
 <% content_for :right_side do %>
   <div class="rs-margin-all">
     <% if @domain_root_account.try_rescue(:enable_user_notes) and can_do(@user, @current_user, :read_user_notes) %>
@@ -25,11 +27,11 @@
     <% end %>
     <% if @presenter.editable? %>
         <div class="show_guess_grades" style="display: none; margin-bottom: 10px; font-size: 0.8em;">
-          <button type="button" class="btn button-sidebar-wide show_guess_grades_link"><%= image_tag "grading_icon.png" %> <%= t('buttons.show_what_if', "Show Saved \"What-If\" Scores") %></button>
+          <button type="button" class="btn button-sidebar-wide show_guess_grades_link"><%= image_tag "grading_icon.png", :alt => "" %> <%= t('buttons.show_what_if', "Show Saved \"What-If\" Scores") %></button>
         </div>
         <div class="revert_all_scores" style="font-size: 0.8em; padding-left: 10px; display: none;">
           <%= t(:not_official, "*NOTE*: This is NOT your official score.") %><br/>
-          <a href="#" class="btn revert_all_scores_link"><%= image_tag "back.png" %> <%= t('links.revert_score', "Revert to Actual Score") %></a>
+          <a href="#" class="btn revert_all_scores_link"><%= image_tag "back.png", :alt => "" %> <%= t('links.revert_score', "Revert to Actual Score") %></a>
         </div>
     <% end %>
     <div class="show_all_details" style="font-size: 0.8em; margin-top: 10px;">
@@ -53,7 +55,9 @@
   </div>
 <% end %>
 
-<a class="btn btn-small print-grades" href="javascript:window.print()"><i class="icon-printer"></i> Print grades</a>
+<a class="btn btn-small print-grades icon-printer" href="javascript:window.print()">
+  <%= t :print_grades, "Print grades" %>
+</a>
 <h2>
 <% ot('headers.grades', "Grades For %{student}", :student => capture { %>
  <% unless @presenter.multiple_observed_students?  %>
@@ -105,22 +109,21 @@
 <table style="width: 100%;" id="grades_summary" class="<%= 'editable' if @presenter.editable? %>">
   <thead>
     <tr>
-      <th scope="row"><%= t('headers.name', "Name") %></th>
-      <th scope="row"><%= t('headers.due', "Due") %></th>
-      <th scope="row"><%= t('headers.score', "Score") %></th>
-      <th scope="row" style="text-align: right; white-space: nowrap;"><%= t('headers.out_of', "Out of") %></th>
-      <th scope="row"><span class="accessible_hide"><%= t('headers.details', "Details") %></span></th>
+      <th scope="col"><%= t('headers.name', "Name") %></th>
+      <th scope="col"><%= t('headers.due', "Due") %></th>
+      <th scope="col"><%= t('headers.score', "Score") %></th>
+      <th scope="col" style="text-align: right; white-space: nowrap;"><%= t('headers.out_of', "Out of") %></th>
+      <th scope="col"><span class="accessible_hide"><%= t('headers.details', "Details") %></span></th>
     </tr>
   </thead>
   <% @presenter.assignment_presenters.each do |assignment_presenter| %>
     <%
        submission = assignment_presenter.submission
        assignment = assignment_presenter.assignment
-       assignment_submissions = assignment_presenter.submissions
        can_view_distribution = can_do(@context, @current_user, :read_as_admin) || !assignment_presenter.hide_distribution_graphs?
     %>
     <tr class="student_assignment <%= 'assignment_graded' if assignment_presenter.graded? %> <%= assignment_presenter.special_class %>" data-muted="<%= assignment.muted? %>" id="<%= "submission_" + assignment.id.to_s %>">
-      <td class="title">
+      <th class="title" scope="row">
         <% if assignment_presenter.is_unread? %>
           <div class="unread-grade">&nbsp;</div>
         <% end %>
@@ -183,26 +186,26 @@
           </div>
         </div>
       </td>
-      <td class="possible points_possible" <%= "colspan='2'" if assignment.special_class %>><%= assignment.points_possible %></td>
+      <td class="possible points_possible" <%= "colspan='2'".html_safe if assignment.special_class %>><%= assignment.points_possible %></td>
       <% if !assignment.special_class %>
       <td style="padding-left: 10px; white-space: nowrap;">
-        <a href="#" class="toggle_comments_link tooltip" aria-role="button" aria-controls="grade_info_<%= assignment.id %>" title="<%= t(:view_comments, "View comments and scoring details") %>" style="<%= 'visibility: hidden;' unless assignment_presenter.has_comments? %>">
+        <a href="#" class="toggle_comments_link tooltip" <% if assignment_presenter.has_comments? %>aria-role="button" aria-controls="grade_info_<%= assignment.id %>"<% else %>aria-hidden='true' role='presentation' tabindex='-1'<% end %> title="<%= t(:view_comments, "View comments and scoring details") %>" style="<%= 'visibility: hidden;' unless assignment_presenter.has_comments? %>">
           <span class="tooltip_wrap right">
             <span class="tooltip_text"><%= t(:comment_count, "comment", :count => (submission.visible_submission_comments.size rescue 0)) %></span>
           </span>
           <i class="icon-discussion standalone-icon"></i>
         </a>
-        <a href="#" class="toggle_comments_link tooltip" aria-role="button" aria-controls="grade_info_<%= assignment.id %>" title="<%= t 'titles.view_scoring_details', 'View Scoring Details' %>" style="<%= 'visibility: hidden;' unless (assignment_presenter.has_scoring_details? && can_view_distribution) %>">
+        <a href="#" class="toggle_comments_link tooltip" <% if assignment_presenter.has_scoring_details? && can_view_distribution %>aria-role="button" aria-controls="grade_info_<%= assignment.id %>"<% else %>aria-hidden='true' role='presentation' tabindex='-1'<% end %> title="<%= t 'titles.view_scoring_details', 'View Scoring Details' %>" style="<%= 'visibility: hidden;' unless (assignment_presenter.has_scoring_details? && can_view_distribution) %>">
           <span class="tooltip_wrap right">
             <span class="tooltip_text"><%= t(:see_scoring_details, "See scoring details") %></span>
           </span>
           <i class="icon-check-plus standalone-icon"></i>
         </a>
-        <a href="#" class="toggle_rubric_assessments_link tooltip" title="<%= t 'titles.view_rubric_evaluation', 'View Rubric Evaluation' %>" style="<%= 'visibility: hidden;' if !assignment_presenter.has_rubric_assessments? %>">
+        <a href="#" class="toggle_rubric_assessments_link tooltip" <% if !assignment_presenter.has_rubric_assessments? %>aria-hidden='true' role='presentation' tabindex='-1'<% end %> title="<%= t 'titles.view_rubric_evaluation', 'View Rubric Evaluation' %>" style="<%= 'visibility: hidden;' if !assignment_presenter.has_rubric_assessments? %>">
           <span class="tooltip_wrap right">
             <span class="tooltip_text"><%= t(:see_rubric_results, "See rubric results") %></span>
           </span>
-          <%= image_tag "rubric.png" %>
+          <%= image_tag "rubric.png", :alt => t('icons.rubric_results', 'See rubric results') %>
         </a>
         <% if @presenter.turnitin_enabled? %>
           <%
@@ -219,7 +222,7 @@
             end
           %>
           <a class="tooltip" title="<%= t('titles.turnitin_score', "Turnitin similarity score -- more information") %>" href="<%= url %>" style="<%= 'visibility: hidden;' if !turnitin %>" target="_blank">
-            <%= turnitin ? image_tag("turnitin_#{turnitin && turnitin[:state]}_score.png") : image_tag("blank.png", :alt => '') %>
+            <%= turnitin ? image_tag("turnitin_#{turnitin && turnitin[:state]}_score.png", :alt => t('icons.turnitin_results', 'See Turnitin results')) : image_tag("blank.png", :alt => '') %>
             <span class="tooltip_wrap right">
               <span class="tooltip_text"><%= t(:see_turnitin_results, "See Turnitin results") %></span>
             </span>
@@ -291,7 +294,7 @@
                 <% if comment.media_comment_id && comment.media_comment_type %>
                   <div class="comment_media">
                     <%= t(:media_comment, "This is a media comment,") %><br/>
-                    <a href="#" class="play_comment_link media-comment"><%= t('links.click_to_view', "click here to view") %></a>
+                    <a href="#" class="play_comment_link <%= comment.media_comment_type %>_comment"><%= t('links.click_to_view', "click here to view") %></a>
                     <span class="media_comment_id" style="display: none;"><%= comment.media_comment_id %></span>
                     <div class="media_comment_content">
                     </div>
@@ -302,7 +305,7 @@
                 <div style="text-align: right; font-size: 0.8em; margin-right: 10px; clear: both;">
                   <% comment.attachments.each do |attachment| %>
                     <div>
-                      <a href="<%= context_url(@context, :context_assignment_submission_url, submission.assignment_id, submission.user_id, :download => attachment.id, :comment_id => comment.id) %>"><%= image_tag "file.png", :style => "height: 12px;" %><%= t('links.download', "Download %{attachment}", :attachment => attachment.display_name) %></a>
+                      <a href="<%= context_url(@context, :context_assignment_submission_url, submission.assignment_id, submission.user_id, :download => attachment.id, :comment_id => comment.id) %>"><%= image_tag "file.png", :style => "height: 12px;", :alt => "" %><%= t('links.download', "Download %{attachment}", :attachment => attachment.display_name) %></a>
                     </div>
                   <% end %>
                 </div>
@@ -328,12 +331,12 @@
   <% end %>
 </table>
 <% if @presenter.has_muted_assignments? %>
-  <small><%= image_tag "sound_mute.png" %><%= t(:student_mute_legend, "Your instructor is working on grades. While your instructor is working on grades, grade and comment information is unavailable.") %></small>
+  <small><%= image_tag "sound_mute.png", :alt => "" %><%= t(:student_mute_legend, "Your instructor is working on grades. While your instructor is working on grades, grade and comment information is unavailable.") %></small>
 <% end %>
 <div id="total_groups_weight" style="display: none;"><%= @presenter.total_weight %></div>
 <%= render :partial => "shared/rubric_criterion_dialog" %>
 <input type="text" style="width: 40px; display: none;" id="grade_entry"/>
-<a href="#" id="revert_score_template" class="revert_score_link" title="<%= t('titles.revert_score', "Revert to original score") %>"><%= image_tag "back.png" %></a>
+<a href="#" id="revert_score_template" class="revert_score_link" title="<%= t('titles.revert_score', "Revert to original score") %>"><%= image_tag "back.png", :alt => "" %></a>
 <a href="<%= context_url(@context, :context_assignment_submission_url, "{{ assignment_id }}", @presenter.student_id) %>" class="update_submission_url" style="display: none;">&nbsp;</a>
 <% if @context.grading_standard_enabled? %>
   <% js_block do %>

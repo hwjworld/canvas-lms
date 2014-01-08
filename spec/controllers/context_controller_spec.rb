@@ -58,7 +58,7 @@ describe ContextController do
     end
 
     describe 'across shards' do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it 'allows merged users from other shards to be referenced' do
         user1 = user_model
@@ -187,6 +187,18 @@ describe ContextController do
       @media_object.media_id.should == "new_object"
       @media_object.media_type.should == "audio"
       @media_object.title.should == "title"
+    end
+
+    it "should truncate the title and user_entered_title" do
+      post :create_media_object,
+        :context_code => "user_#{@user.id}",
+        :id => "new_object",
+        :type => "audio",
+        :title => 'x' * 300,
+        :user_entered_title => 'y' * 300
+      @media_object = @user.reload.media_objects.last
+      @media_object.title.size.should <= 255
+      @media_object.user_entered_title.size.should <= 255
     end
   end
 

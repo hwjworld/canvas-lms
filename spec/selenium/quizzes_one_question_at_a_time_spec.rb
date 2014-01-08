@@ -22,14 +22,15 @@ describe "One Question at a Time Quizzes" do
   end
 
   def quiz_question(name, question, id)
-    answers = {
-      :a => {:weight=>100, :answer_text=>"A", :answer_comments=>"", :id=>1490},
-      :b => {:weight=>0, :answer_text=>"B", :answer_comments=>"", :id=>1020},
-      :c => {:weight=>0, :answer_text=>"C", :answer_comments=>"", :id=>7051}
-    }
+    answers = [
+      {:weight=>100, :answer_text=>"A", :answer_comments=>"", :id=>1490},
+      {:weight=>0, :answer_text=>"B", :answer_comments=>"", :id=>1020},
+      {:weight=>0, :answer_text=>"C", :answer_comments=>"", :id=>7051}
+    ]
     data = { :question_name=>name, :points_possible=>1, :question_text=>question,
       :answers=>answers, :question_type=>"multiple_choice_question"
     }
+
     @quiz.quiz_questions.create!(:question_data => data)
   end
 
@@ -253,6 +254,7 @@ describe "One Question at a Time Quizzes" do
       end
 
       it "displays one question at a time but you cant go back" do
+        pending("193")
         take_the_quiz
 
         it_should_show_cant_go_back_warning
@@ -299,7 +301,7 @@ describe "One Question at a Time Quizzes" do
         submit_unfinished_quiz
       end
 
-      it "should warn about resuming from the right sidebar" do
+      it "should warn about resuming" do
         take_the_quiz
 
         it_should_show_cant_go_back_warning
@@ -312,7 +314,7 @@ describe "One Question at a Time Quizzes" do
 
         fj("a:contains('OQAAT quiz')").click
         wait_for_ajaximations
-        fj("#right-side a:contains('Resume Quiz')").click
+        fj("#not_right_side .take_quiz_button a:contains('Resume Quiz')").click
 
         it_should_show_cant_go_back_warning
         accept_cant_go_back_warning
@@ -346,6 +348,7 @@ describe "One Question at a Time Quizzes" do
       end
 
       it "displays one question at a time but you cant go back" do
+        pending("193")
         preview_the_quiz
         sequential_flow
       end

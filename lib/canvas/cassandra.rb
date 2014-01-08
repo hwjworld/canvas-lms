@@ -1,3 +1,4 @@
+# encoding: utf-8
 #
 # Copyright (C) 2012 Instructure, Inc.
 #
@@ -17,17 +18,22 @@
 #
 module Canvas::Cassandra
   class Database
-    def self.configured?(config_name)
+    def self.configured?(config_name, environment = :current)
       raise ArgumentError, "config name required" if config_name.blank?
-      config = Setting.from_config('cassandra').try(:[], config_name)
+      config = Setting.from_config('cassandra', environment).try(:[], config_name)
       config && config['servers'] && config['keyspace']
     end
 
-    def self.from_config(config_name)
+    def self.from_config(config_name, environment = :current)
       @connections ||= {}
-      @connections[config_name] ||= begin
-        config = Setting.from_config('cassandra').try(:[], config_name)
-        raise ArgumentError, "No configuration for Cassandra for: #{config_name.inspect}" unless config
+      environment = Rails.env if environment == :current
+      key = [config_name, environment]
+      @connections.fetch(key) do
+        config = Setting.from_config('cassandra', environment).try(:[], config_name)
+        unless config
+          @connections[key] = nil
+          return nil
+        end
         servers = Array(config['servers'])
         raise "No Cassandra servers defined for: #{config_name.inspect}" unless servers.present?
         keyspace = config['keyspace']
@@ -37,7 +43,7 @@ module Canvas::Cassandra
         thrift_opts[:retries] = config['retries'] if config['retries']
         thrift_opts[:connect_timeout] = config['connect_timeout'] if config['connect_timeout']
         thrift_opts[:timeout] = config['timeout'] if config['timeout']
-        self.new(servers, opts, thrift_opts)
+        @connections[key] = self.new(config_name, environment, servers, opts, thrift_opts)
       end
     end
 
@@ -45,9 +51,15 @@ module Canvas::Cassandra
       Setting.from_config('cassandra').try(:keys) || []
     end
 
-    def initialize(servers, opts, thrift_opts)
+    def initialize(cluster_name, environment, servers, opts, thrift_opts)
       Bundler.require 'cassandra'
       @db = CassandraCQL::Database.new(servers, opts, thrift_opts)
+      @cluster_name = cluster_name
+      @environment = environment
+    end
+
+    def fingerprint
+      "#@cluster_name:#@environment"
     end
 
     attr_reader :db
@@ -61,19 +73,27 @@ module Canvas::Cassandra
       ms = Benchmark.ms do
         result = @db.execute(query, *args)
       end
-      Rails.logger.debug("  #{"CQL (%.2fms)" % [ms]}  #{::CassandraCQL::Statement.sanitize(query, args)}")
+      Rails.logger.debug("  #{"CQL (%.2fms)" % [ms]}  #{sanitize(query, args)} [#{fingerprint}]")
       result
     end
 
+    def sanitize(query, args)
+      ::CassandraCQL::Statement.sanitize(query, args)
+    end
+
     # private Struct used to store batch information
-    class Batch < Struct.new(:statements, :args)
+    class Batch < Struct.new(:statements, :args, :counter_statements, :counter_args)
       def initialize
         self.statements = []
         self.args = []
+        self.counter_statements = []
+        self.counter_args = []
       end
-      delegate :empty?, :present?, :blank?, :to => :statements
 
-      def to_cql_ary
+      def to_cql_ary(field = nil)
+        field = "#{field}_" if field
+        statements = send("#{field}statements")
+        args = send("#{field}args")
         case statements.size
         when 0
           raise "Cannot execute an empty batch"
@@ -83,7 +103,7 @@ module Canvas::Cassandra
           # http://www.datastax.com/docs/1.1/references/cql/BATCH
           # note there's no semicolons between statements in the batch
           cql = []
-          cql << "BEGIN BATCH"
+          cql << "BEGIN #{'COUNTER ' if field == 'counter_'}BATCH"
           cql.concat statements
           cql << "APPLY BATCH"
           # join with spaces rather than newlines, because cassandra doesn't care
@@ -106,6 +126,17 @@ module Canvas::Cassandra
       nil
     end
 
+    def update_counter(query, *args)
+      return update(query, *args) unless db.use_cql3?
+      if in_batch?
+        @batch.counter_statements << query
+        @batch.counter_args.concat args
+      else
+        execute(query, *args)
+      end
+      nil
+    end
+
     # Batch up all execute statements inside the given block, executing when
     # the block returns successfully.
     # Note that this only batches up update calls, not execute calls, since
@@ -121,8 +152,11 @@ module Canvas::Cassandra
         begin
           @batch = Batch.new
           yield
-          unless @batch.empty?
+          unless @batch.statements.empty?
             execute(*@batch.to_cql_ary)
+          end
+          unless @batch.counter_statements.empty?
+            execute(*@batch.to_cql_ary(:counter))
           end
         ensure
           @batch = nil
@@ -142,10 +176,18 @@ module Canvas::Cassandra
     # in other words, changes is a hash in either of these formats (mixing is ok):
     #   { "colname" => newvalue }
     #   { "colname" => [oldvalue, newvalue] }
-    def update_record(table_name, primary_key_attrs, changes)
+    def update_record(table_name, primary_key_attrs, changes, ttl_seconds=nil)
       batch do
-        do_update_record(table_name, primary_key_attrs, changes)
+        do_update_record(table_name, primary_key_attrs, changes, ttl_seconds)
       end
+    end
+
+    # same as update_record, but preferred when doing inserts -- it skips
+    # updating columns with nil values, rather than creating tombstone delete
+    # records for them
+    def insert_record(table_name, primary_key_attrs, changes, ttl_seconds=nil)
+      changes = changes.reject { |k,v| v.is_a?(Array) ? v.last.nil? : v.nil? }
+      update_record(table_name, primary_key_attrs, changes, ttl_seconds)
     end
 
     def select_value(query, *args)
@@ -153,17 +195,32 @@ module Canvas::Cassandra
       result_row && result_row.to_hash.values.first
     end
 
-    def keyspace_information
-      @db.keyspaces.find { |k| k.name == @db.keyspace }
+    def tables
+      if @db.use_cql3?
+        @db.execute("SELECT columnfamily_name FROM system.schema_columnfamilies WHERE keyspace_name=?", @db.keyspace).map do |row|
+          row['columnfamily_name']
+        end
+      else
+        @db.schema.tables
+      end
+    end
+
+    # returns a CQL snippet and list of arguments given a hash of conditions
+    # e.g.
+    # build_where_conditions(name: "foo", state: "ut")
+    # => ["name = ? AND state = ?", ["foo", "ut"]]
+    def build_where_conditions(conditions)
+      where_args = []
+      where_clause = conditions.sort_by { |k,v| k.to_s }.map { |k,v| where_args << v; "#{k} = ?" }.join(" AND ")
+      return where_clause, where_args
     end
 
     protected
 
-    def do_update_record(table_name, primary_key_attrs, changes)
-      where_args = []
+    def do_update_record(table_name, primary_key_attrs, changes, ttl_seconds)
       primary_key_attrs = primary_key_attrs.with_indifferent_access
       changes = changes.with_indifferent_access
-      where_clause = primary_key_attrs.sort_by { |k,v| k.to_s }.map { |k,v| where_args << v; "#{k} = ?" }.join(" AND ")
+      where_clause, where_args = build_where_conditions(primary_key_attrs)
 
       primary_key_attrs.each do |key,value|
         if changes[key].is_a?(Array) && !changes[key].first.nil?
@@ -185,8 +242,13 @@ module Canvas::Cassandra
       # so no need to differentiate here
       if updates.present?
         args = []
+        statement = "UPDATE #{table_name}"
+        if ttl_seconds
+          args << ttl_seconds
+          statement << " USING TTL ?"
+        end
         update_cql = updates.map { |key,val| args << val; "#{key} = ?" }.join(", ")
-        statement = "UPDATE #{table_name} SET #{update_cql} WHERE #{where_clause}"
+        statement << " SET #{update_cql} WHERE #{where_clause}"
         args.concat where_args
         update(statement, *args)
       end
@@ -209,7 +271,7 @@ module Canvas::Cassandra
 
       def runnable?
         raise "cassandra_cluster is required to be defined" unless respond_to?(:cassandra_cluster) && cassandra_cluster.present?
-        Shard.current.default? && Canvas::Cassandra::Database.configured?(cassandra_cluster)
+        Shard.current == Shard.birth && Canvas::Cassandra::Database.configured?(cassandra_cluster)
       end
     end
 

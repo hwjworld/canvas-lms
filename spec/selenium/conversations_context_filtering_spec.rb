@@ -2,9 +2,9 @@ require File.expand_path(File.dirname(__FILE__) + '/helpers/conversations_common
 
 describe "conversations context filtering" do
   it_should_behave_like "in-process server selenium tests"
-  it_should_behave_like "conversations selenium tests"
 
   before (:each) do
+    conversation_setup
     @course.update_attribute(:name, "the course")
     @course1 = @course
     @s1 = User.create(:name => "student1")
@@ -20,6 +20,7 @@ describe "conversations context filtering" do
   end
 
   it "should capture the course when sending a message to a group" do
+    pending('selupgrade')
     new_conversation
     browse_menu
 
@@ -150,6 +151,7 @@ describe "conversations context filtering" do
   end
 
   it "should let you filter by a user" do
+    pending("need to fix")
     new_conversation
     browse_menu
     browse("the course", "Everyone") { click "Select All" }

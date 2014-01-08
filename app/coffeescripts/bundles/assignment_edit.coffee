@@ -1,6 +1,8 @@
 # manage groups is for the add_group_category dialog
 require [
+  'compiled/models/Section'
   'compiled/models/Assignment'
+  'compiled/views/assignments/EditHeaderView'
   'compiled/views/assignments/EditView'
   'compiled/collections/SectionCollection'
   'compiled/models/DueDateList'
@@ -12,9 +14,9 @@ require [
   'compiled/views/assignments/PeerReviewsSelector'
   'grading_standards'
   'manage_groups'
-], (Assignment, EditView, SectionCollection, DueDateList, DueDateListView,
-OverrideView, AssignmentGroupSelector, GradingTypeSelector,
-GroupCategorySelector, PeerReviewsSelector) ->
+], (Section,Assignment, EditHeaderView, EditView, SectionCollection,
+  DueDateList, DueDateListView, OverrideView, AssignmentGroupSelector,
+  GradingTypeSelector, GroupCategorySelector, PeerReviewsSelector) ->
 
   ENV.ASSIGNMENT.assignment_overrides = ENV.ASSIGNMENT_OVERRIDES
 
@@ -22,6 +24,8 @@ GroupCategorySelector, PeerReviewsSelector) ->
   assignment.urlRoot = ENV.URL_ROOT
 
   sectionList = new SectionCollection ENV.SECTION_LIST
+  if !sectionList.length
+    sectionList.add Section.defaultDueDateSection()
   dueDateList = new DueDateList assignment.get('assignment_overrides'), sectionList, assignment
 
   assignmentGroupSelector = new AssignmentGroupSelector
@@ -34,6 +38,10 @@ GroupCategorySelector, PeerReviewsSelector) ->
     groupCategories: ENV?.GROUP_CATEGORIES || []
   peerReviewsSelector = new PeerReviewsSelector
     parentModel: assignment
+
+  editHeaderView = new EditHeaderView
+    el: '#edit_assignment_header'
+    model: assignment
 
   editView = new EditView
     el: '#edit_assignment_form'
@@ -48,4 +56,5 @@ GroupCategorySelector, PeerReviewsSelector) ->
         views:
           'due-date-overrides': new DueDateListView(model: dueDateList)
       
+  editHeaderView.render()
   editView.render()

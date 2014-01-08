@@ -48,6 +48,7 @@ define([
   var readOnlyGradebook = window.readOnlyGradebook;
   var gradebook = window.gradebook;
   var speedGraderEnabled = ENV.speed_grader_enabled;
+  var object_data = null;
 
   var $loading_gradebook_progressbar = $("#loading_gradebook_progressbar"),
       $default_grade_form = $("#default_grade_form"),
@@ -71,6 +72,7 @@ define([
       $courseSections  = $(".outer_student_name .course_section"),
       contextId = $("#current_context_code").text().split("_")[1],
       sectionToShow = userSettings.contextGet('grading_show_only_section');
+  sectionToShow = sectionToShow && String(sectionToShow);
 
   $courseSections.each(function(){
     possibleSections[$(this).data('course_section_id')] = $(this).attr('title'); 
@@ -571,6 +573,7 @@ define([
                   title: title,
                   points_possible: data.points_possible,
                   students: students,
+                  context_code: data.context_code,
                   callback: function(selected, cutoff, students) {
                     students = $.grep(students, function($student, idx) {
                       var student = $student.user_data;
@@ -585,6 +588,18 @@ define([
                       }
                     });
                     return $.map(students, function(student) { return student.user_data.id; });
+                  },
+                  subjectCallback: function(selected, cutoff) {
+                    cutoff = cutoff || '';
+                    if(selected == I18n.t('students_who.not_submitted_yet', "Haven't submitted yet")) {
+                      return I18n.t('students_who.no_submission_for', 'No submission for %{assignment}', {assignment: data.title});
+                    } else if (selected == I18n.t("students_who.havent_been_graded", "Haven't been graded")) {
+                      return I18n.t('students_who.no_grade_for', 'No grade for %{assignment}', {assignment: data.title});
+                    } else if(selected == I18n.t('students_who.scored_less_than', "Scored less than")) {
+                      return I18n.t('students_who.scored_less_than_on', 'Scored less than %{cutoff} on %{assignment}', {assignment: data.title, cutoff: cutoff});
+                    } else if(selected == I18n.t('students_who.scored_more_than', "Scored more than")) {
+                      return I18n.t('students_who.scored_more_than_on', 'Scored more than %{cutoff} on %{assignment}', {assignment: data.title, cutoff: cutoff});
+                    }
                   }
                 });
               });
@@ -1544,7 +1559,7 @@ define([
       data.submission_type = submission.submission_type || "";
       val = emptySubmissionText(data);
     }
-    $parent.find(".grade").show().empty().append(val);
+    $parent.find(".grade").show().empty().append(htmlEscape(val));
   }
 
   function toggleColumn($obj, show) {
@@ -1642,9 +1657,9 @@ define([
         url = $.replaceTags(url, "user_id", submission.user_id);
         $type.append(" <a href='" + url + "' target='_new' class='view_submission_link'>" + I18n.t('links.view_submission', "View Submission") + "</a>");
       }
-    } else if(submission.quiz_submission) {
+    } else if(submission.quiz_submission_id) {
       var url = $("#gradebook_urls .view_quiz_url").attr('href');
-      url = $.replaceTags(url, "quiz_id", submission.quiz_submission.quiz_id);
+      url = $.replaceTags(url, "quiz_id", assignment.quiz_id);
       url = $.replaceTags(url, "user_id", submission.user_id);
       if(submission.workflow_state == "pending_review") {
         $type.append($("#submission_pending_review_image").clone().removeAttr('id'));

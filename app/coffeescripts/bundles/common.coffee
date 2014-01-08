@@ -3,6 +3,7 @@ require [
   'Backbone'
   'compiled/widget/courseList'
   'compiled/helpDialog'
+  'compiled/tours'
 
   # modules that do their own thing on every page that simply need to
   # be required
@@ -19,6 +20,7 @@ require [
   'compiled/license_help'
   'compiled/behaviors/ujsLinks'
   'compiled/behaviors/admin-links'
+  'compiled/behaviors/activate'
   'compiled/behaviors/elementToggler'
   # uncomment these to turn on collection pinning and voting
   # 'compiled/behaviors/upvote-item'
@@ -45,9 +47,10 @@ require [
   'vendor/jquery.pageless'
   'vendor/jquery.scrollTo'
   'compiled/badge_counts'
-], (Backbone, courseList, helpDialog) ->
+], (Backbone, courseList, helpDialog, tours) ->
   courseList.init()
   helpDialog.initTriggers()
+  tours.init()
 
   # Make the font-based icons work in IE8,
   # it needs to be told to redraw pseudo elements on page load

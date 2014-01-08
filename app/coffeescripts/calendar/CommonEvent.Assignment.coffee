@@ -24,26 +24,26 @@ define [
       @addClass "group_#{@contextCode()}"
       @description = data.description
       @start = @parseStartDate()
-      @originalStartDate = new Date(@start) if @start
+      @end = null # in case it got set by midnight fudging
 
       super
 
     fullDetailsURL: () ->
       @assignment.html_url
 
-    startDate: () -> @originalStartDate
-
     parseStartDate: () ->
       if @assignment.due_at then $.parseFromISO(@assignment.due_at, 'due_date').time else null
 
     displayTimeString: () ->
-      if !@assignment.due_at
+      unless date = @originalStart
         return "No Date" # TODO: i18n
 
-      date = $.parseFromISO @assignment.due_at, 'due_date'
       # TODO: i18n
-      time_string = "#{$.dateString(date.date)} at #{date.time_string}"
-      "Due: <time datetime='#{date.time.toISOString()}'>#{time_string}</time>"
+      time_string = "#{$.dateString(date)} at #{$.timeString(date)}"
+      "Due: <time datetime='#{date.toISOString()}'>#{time_string}</time>"
+
+    readableType: () ->
+      @readableTypes[@assignmentType()]
 
     saveDates: (success, error) =>
       @save { 'assignment[due_at]': $.dateToISO8601UTC($.unfudgeDateForProfileTimezone(@start)) }, success, error

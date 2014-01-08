@@ -26,14 +26,17 @@ define [
     translations:
       errors:
         noName: I18n.t('errors.no_name', 'Please enter a name for this collaboration.')
+        titleTooLong: I18n.t('errors.title_too_long', "Please use %{maxLength} characters or less for the name. Use the description for additional content.", {maxLength: ENV.TITLE_MAX_LEN})
 
     events:
       'submit': 'onSubmit'
       'click .cancel_button': 'onCancel'
 
     initialize: ->
+      super
       @cacheElements()
       @picker = new CollaboratorPickerView(el: @$collaborators)
+      @titleMaxLength = ENV.TITLE_MAX_LEN #255
 
     cacheElements: ->
       @$titleInput    = @$el.find('#collaboration_title')
@@ -51,6 +54,10 @@ define [
         e.preventDefault()
         e.stopPropagation()
         return @raiseTitleError()
+      if @titleMaxLength && data['collaboration[title]'].length > @titleMaxLength
+        e.preventDefault()
+        e.stopPropagation()
+        return @raiseTitleLengthError()
       setTimeout ->
         window.location = window.location.pathname
       , 2500
@@ -62,4 +69,8 @@ define [
 
     raiseTitleError: ->
       @trigger('error', @$titleInput, @translations.errors.noName)
+      false
+
+    raiseTitleLengthError: ->
+      @trigger('error', @$titleInput, @translations.errors.titleTooLong)
       false

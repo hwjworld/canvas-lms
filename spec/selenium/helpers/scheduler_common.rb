@@ -1,8 +1,5 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
-shared_examples_for "scheduler selenium tests" do
-  it_should_behave_like "in-process server selenium tests"
-
   def fill_out_appointment_group_form(new_appointment_text, opts = {})
     f('.create_link').click
     edit_form = f('#edit_appointment_form')
@@ -18,18 +15,18 @@ shared_examples_for "scheduler selenium tests" do
     f('.ag_contexts_done').click
     if opts[:checkable_options]
       if opts[:checkable_options].has_key?(:per_slot_option)
-        set_value f('[name="per_slot_option"]'), true
+        set_value f('[type=checkbox][name="per_slot_option"]'), true
       end
       if opts[:checkable_options].has_key?(:participant_visibility)
-        set_value f('[name="participant_visibility"]'), true
+        set_value f('[type=checkbox][name="participant_visibility"]'), true
       end
       if opts[:checkable_options].has_key?(:max_appointments_per_participant_option)
-        set_value f('[name="max_appointments_per_participant_option"]'), true
+        set_value f('[type=checkbox][name="max_appointments_per_participant_option"]'), true
       end
     end
     date_field = edit_form.find_element(:css, '.date_field')
     date_field.click
-    wait_for_animations
+    wait_for_ajaximations
     fj('.ui-datepicker-trigger:visible').click
     datepicker_next
     replace_content(edit_form.find_element(:css, '.start_time'), '1')
@@ -60,7 +57,7 @@ shared_examples_for "scheduler selenium tests" do
   end
 
   def click_scheduler_link
-    f('#calendar_views .ui-button[for="scheduler"]').click
+    f('button#scheduler').click
     wait_for_ajaximations
   end
 
@@ -95,6 +92,6 @@ shared_examples_for "scheduler selenium tests" do
   def open_edit_dialog
     driver.action.move_to(f('.appointment-group-item')).perform
     click_al_option('.edit_link')
+    wait_for_ajaximations
   end
-end
 

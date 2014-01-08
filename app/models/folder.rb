@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -50,7 +50,7 @@ class Folder < ActiveRecord::Base
   before_save :infer_hidden_state
   validates_presence_of :context_id, :context_type
   validates_length_of :name, :maximum => maximum_string_length
-  validate_on_update :reject_recursive_folder_structures
+  validate :reject_recursive_folder_structures, on: :update
 
   def reject_recursive_folder_structures
     return true if !self.parent_folder_id_changed?
@@ -84,16 +84,16 @@ class Folder < ActiveRecord::Base
     self.workflow_state = 'deleted'
     self.active_file_attachments.each{|a| a.destroy }
     self.active_sub_folders.each{|s| s.destroy }
-    self.deleted_at = Time.now
+    self.deleted_at = Time.now.utc
     self.save
   end
   
-  named_scope :active, :conditions => ['folders.workflow_state != ?', 'deleted']
-  named_scope :not_hidden, :conditions => ['folders.workflow_state != ?', 'hidden']
-  named_scope :not_locked, lambda {{:conditions => ['(folders.locked IS NULL OR folders.locked = ?) AND ((folders.lock_at IS NULL) OR
-    (folders.lock_at > ? OR (folders.unlock_at IS NOT NULL AND folders.unlock_at < ?)))', false, Time.now, Time.now]}}
-  named_scope :by_position, :order => 'position'
-  named_scope :by_name, :order => name_order_by_clause('folders')
+  scope :active, where("folders.workflow_state<>'deleted'")
+  scope :not_hidden, where("folders.workflow_state<>'hidden'")
+  scope :not_locked, lambda { where("(folders.locked IS NULL OR folders.locked=?) AND ((folders.lock_at IS NULL) OR
+    (folders.lock_at>? OR (folders.unlock_at IS NOT NULL AND folders.unlock_at<?)))", false, Time.now.utc, Time.now.utc) }
+  scope :by_position, order(:position)
+  scope :by_name, order(name_order_by_clause('folders'))
 
   def display_name
     name
@@ -163,40 +163,40 @@ class Folder < ActiveRecord::Base
     res += self.active_file_attachments unless opts[:exclude_files]
     res
   end
-  
+
   def visible?
     # everything but private folders should be visible... for now...
-    (self.workflow_state == "visible") && (!self.parent_folder || self.parent_folder.visible?)
+    return @visible if defined?(@visible)
+    @visible = (self.workflow_state == "visible") && (!self.parent_folder || self.parent_folder.visible?)
   end
-  memoize :visible?
-  
+
   def hidden?
-    self.workflow_state == 'hidden' || (self.parent_folder && self.parent_folder.hidden?)
+    return @hidden if defined?(@hidden)
+    @hidden = self.workflow_state == 'hidden' || (self.parent_folder && self.parent_folder.hidden?)
   end
-  memoize :hidden?
-  
+
   def hidden
     hidden?
   end
-  
+
   def hidden=(val)
     self.workflow_state = (val == true || val == '1' || val == 'true' ? 'hidden' : 'visible')
   end
-  
+
   def just_hide
     self.workflow_state == 'hidden'
   end
-  
+
   def protected?
-    (self.workflow_state == 'protected') || (self.parent_folder && self.parent_folder.protected?)
+    return @protected if defined?(@protected)
+    @protected = (self.workflow_state == 'protected') || (self.parent_folder && self.parent_folder.protected?)
   end
-  memoize :protected?
-  
+
   def public?
-    self.workflow_state == 'public' || (self.parent_folder && self.parent_folder.public?)
+    return @public if defined?(@public)
+    @public = self.workflow_state == 'public' || (self.parent_folder && self.parent_folder.public?)
   end
-  memoize :public?
-  
+
   def mime_class
     "folder"
   end
@@ -258,10 +258,12 @@ class Folder < ActiveRecord::Base
 
     root_folders = []
 
-    Folder.unique_constraint_retry do
-      root_folder = context.folders.active.find_by_parent_folder_id_and_name(nil, name)
-      root_folder ||= context.folders.create(:name => name, :full_name => name, :workflow_state => "visible")
-      root_folders = [root_folder]
+    context.shard.activate do
+      Folder.unique_constraint_retry do
+        root_folder = context.folders.active.find_by_parent_folder_id_and_name(nil, name)
+        root_folder ||= context.folders.create!(:name => name, :full_name => name, :workflow_state => "visible")
+        root_folders = [root_folder]
+      end
     end
 
     root_folders
@@ -275,16 +277,16 @@ class Folder < ActiveRecord::Base
   # method before the folder is saved
   def self.assert_path(path, context)
     @@path_lookups ||= {}
-    key = [context.asset_string, path].join('//')
+    key = [context.global_asset_string, path].join('//')
     return @@path_lookups[key] if @@path_lookups[key]
     folders = path.split('/').select{|f| !f.empty? }
     @@root_folders ||= {}
-    current_folder = (@@root_folders[context.asset_string] ||= Folder.root_folders(context).first)
+    current_folder = (@@root_folders[context.global_asset_string] ||= Folder.root_folders(context).first)
     if folders[0] == current_folder.name
       folders.shift
     end
     folders.each do |name|
-      sub_folder = @@path_lookups[[context.asset_string, current_folder.full_name + '/' + name].join('//')]
+      sub_folder = @@path_lookups[[context.global_asset_string, current_folder.full_name + '/' + name].join('//')]
       sub_folder ||= current_folder.sub_folders.active.find_or_initialize_by_name(name)
       current_folder = sub_folder
       if current_folder.new_record?
@@ -292,7 +294,7 @@ class Folder < ActiveRecord::Base
         yield current_folder if block_given?
         current_folder.save!
       end
-      @@path_lookups[[context.asset_string, current_folder.full_name].join('//')] ||= current_folder
+      @@path_lookups[[context.global_asset_string, current_folder.full_name].join('//')] ||= current_folder
     end
     @@path_lookups[key] = current_folder
   end
@@ -300,9 +302,9 @@ class Folder < ActiveRecord::Base
   def self.unfiled_folder(context)
     folder = context.folders.find_by_parent_folder_id_and_workflow_state_and_name(Folder.root_folders(context).first.id, 'visible', 'unfiled')
     unless folder
-      folder = context.folders.new(:parent_folder => Folder.root_folders(context).first, :name => 'unfiled')
+      folder = context.folders.build(:parent_folder => Folder.root_folders(context).first, :name => 'unfiled')
       folder.workflow_state = 'visible'
-      folder.save
+      folder.save!
     end
     folder
   end
@@ -349,17 +351,17 @@ class Folder < ActiveRecord::Base
   end
 
   def locked?
-    self.locked ||
-    (self.lock_at && Time.now > self.lock_at) ||
-    (self.unlock_at && Time.now < self.unlock_at) ||
-    (self.parent_folder && self.parent_folder.locked?)
+    return @locked if defined?(@locked)
+    @locked = self.locked ||
+      (self.lock_at && Time.now > self.lock_at) ||
+      (self.unlock_at && Time.now < self.unlock_at) ||
+      (self.parent_folder && self.parent_folder.locked?)
   end
-  memoize :locked?
 
   def currently_locked
     self.locked || (self.lock_at && Time.now > self.lock_at) || (self.unlock_at && Time.now < self.unlock_at) || self.workflow_state == 'hidden'
   end
-  
+
   set_policy do
     given { |user, session| self.visible? && self.cached_context_grants_right?(user, session, :read) }#students.include?(user) }
     can :read

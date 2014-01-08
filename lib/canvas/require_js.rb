@@ -1,6 +1,8 @@
+require 'lib/canvas/require_js/plugin_extension'
 module Canvas
   module RequireJs
     class << self
+      @@matcher = nil
       def get_binding
         binding
       end
@@ -8,8 +10,12 @@ module Canvas
       PATH_REGEX = %r{.*?/javascripts/(plugins/)?(.*)\.js\z}
       JS_ROOT = "#{Rails.root}/public/javascripts"
 
+      def matcher=(value)
+        @@matcher = value
+      end
+
       def matcher
-        ENV['JS_SPEC_MATCHER'] || '**/*Spec.js'
+        @@matcher || ENV['JS_SPEC_MATCHER'] || '**/*Spec.js'
       end
 
       # get all regular canvas (and plugin) bundles
@@ -50,13 +56,17 @@ module Canvas
         bundle == '*' ? result : (result[bundle.to_s] || [])
       end
 
-      def paths
+      def paths(cache_busting = false)
         @paths ||= {
+          :ember => 'vendor/ember/ember',
           :common => 'compiled/bundles/common',
           :jqueryui => 'vendor/jqueryui',
           :use => 'vendor/use',
-          :uploadify => '../flash/uploadify/jquery.uploadify-3.1.min'
-        }.update(plugin_paths).to_json.gsub(/([,{])/, "\\1\n    ")
+          :uploadify => '../flash/uploadify/jquery.uploadify-3.1.min',
+          'ic-menu' => 'vendor/ic-menu/dist/main.amd',
+          'ic-dialog' => 'vendor/ic-dialog/dist/main.amd',
+          'ic-ajax' => 'vendor/ic-ajax/main',
+        }.update(cache_busting ? cache_busting_paths : {}).update(plugin_paths).update(Canvas::RequireJs::PluginExtension.paths).to_json.gsub(/([,{])/, "\\1\n    ")
       end
   
       def plugin_paths
@@ -69,6 +79,10 @@ module Canvas
         end
       end
 
+      def cache_busting_paths
+        { 'compiled/tinymce' => 'compiled/tinymce.js?v2' } # hack: increment to purge browser cached bundles after tiny change
+      end
+      
       def shims
         <<-JS.gsub(%r{\A +|^ {8}}, '')
           {
@@ -80,12 +94,12 @@ module Canvas
             },
         
             // slick grid shim
-            'vendor/slickgrid/lib/jquery.event.drag-2.0.min': {
+            'vendor/slickgrid/lib/jquery.event.drag-2.2': {
               deps: ['jquery'],
               attach: '$'
             },
             'vendor/slickgrid/slick.core': {
-              deps: ['jquery', 'use!vendor/slickgrid/lib/jquery.event.drag-2.0.min'],
+              deps: ['jquery', 'use!vendor/slickgrid/lib/jquery.event.drag-2.2'],
               attach: 'Slick'
             },
             'vendor/slickgrid/slick.grid': {
@@ -102,6 +116,20 @@ module Canvas
             },
 
             'uploadify' : {
+              deps: ['jquery'],
+              attach: '$'
+            },
+
+            'vendor/FileAPI/FileAPI.min': {
+              deps: ['jquery', 'vendor/FileAPI/config'],
+              attach: 'FileAPI'
+            },
+
+            'vendor/bootstrap/bootstrap-dropdown' : {
+              deps: ['jquery'],
+              attach: '$'
+            },
+            'vendor/bootstrap-select/bootstrap-select' : {
               deps: ['jquery'],
               attach: '$'
             }

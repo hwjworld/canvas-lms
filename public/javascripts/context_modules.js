@@ -17,10 +17,16 @@
  */
 
 define([
+  'compiled/models/PublishableModuleItem',
+  'compiled/views/PublishIconView',
   'INST' /* INST */,
   'i18n!context_modules',
   'jquery' /* $ */,
-  'compiled/views/context_modules/context_modules', /* handles the publish/unpublish state */
+  'compiled/views/context_modules/context_modules' /* handles the publish/unpublish state */,
+  'compiled/util/vddTooltip',
+  'jst/_vddTooltip',
+  'compiled/models/Publishable',
+  'compiled/views/PublishButtonView',
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.instructure_date_and_time' /* parseFromISO, time_field, datetime_field */,
   'jquery.instructure_forms' /* formSubmit, fillFormData, formErrors, errorBox */,
@@ -34,7 +40,7 @@ define([
   'vendor/date' /* Date.parse */,
   'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
   'jqueryui/sortable' /* /\.sortable/ */
-], function(INST, I18n, $, ContextModulesView) {
+], function(PublishableModuleItem, PublishIconView, INST, I18n, $, ContextModulesView, vddTooltip, vddTooltipView, Publishable, PublishButtonView) {
 
   // TODO: AMD don't export global, use as module
   window.modules = (function() {
@@ -54,6 +60,51 @@ define([
         }
         return indent;
       },
+
+      updateModulePositions: function() {
+        var ids = []
+        $("#context_modules .context_module").each(function() {
+          ids.push($(this).attr('id').substring('context_module_'.length));
+        });
+        var url = $(".reorder_modules_url").attr('href');
+        $("#context_modules").loadingImage();
+        $.ajaxJSON(url, 'POST', {order: ids.join(",")}, function(data) {
+          $("#context_modules").loadingImage('remove');
+          for(var idx in data) {
+            var module = data[idx];
+            $("#context_module_" + module.context_module.id).triggerHandler('update', module);
+          }
+        }, function(data) {
+          $("#context_modules").loadingImage('remove');
+        });
+      },
+
+      updateModuleItemPositions: function(event, ui) {
+        var $module = ui.item.parents(".context_module");
+        var url = $module.find(".reorder_items_url").attr('href');
+        var items = [];
+        $module.find(".context_module_items .context_module_item").each(function() {
+          items.push($(this).getTemplateData({textValues: ['id']}).id);
+        });
+        $module.find(".context_module_items.ui-sortable").sortable('disable');
+        $module.disableWhileLoading(
+          $.ajaxJSON(url, 'POST', {order: items.join(",")}, function(data) {
+            if(data && data.context_module && data.context_module.content_tags) {
+              for(var idx in data.context_module.content_tags) {
+                var tag = data.context_module.content_tags[idx].content_tag;
+                $module.find("#context_module_item_" + tag.id).fillTemplateData({
+                  data: {position: tag.position}
+                });
+              }
+            }
+            $module.find(".context_module_items.ui-sortable").sortable('enable');
+          }, function(data) {
+            $module.find(".content").loadingImage('remove');
+            $module.find(".content").errorBox(I18n.t('errors.reorder', 'Reorder failed, please try again.'));
+          })
+        );
+      },
+
       refreshProgressions: function(show_links) {
         if (ENV.NO_MODULE_PROGRESSIONS) return;
 
@@ -170,17 +221,20 @@ define([
       updateAssignmentData: function() {
         $.ajaxJSON($(".assignment_info_url").attr('href'), 'GET', {}, function(data) {
           $.each(data, function(id, info) {
+            $context_module_item = $("#context_module_item_" + id);
             var data = {};
             if (info["points_possible"] != null) {
               data["points_possible_display"] = I18n.t('points_possible_short', '%{points} pts', { 'points': "<span class='points_possible_block'>" + info["points_possible"] + "</span>" });
             }
             if (info["due_date"] != null) {
               data["due_date_display"] = $.parseFromISO(info["due_date"]).date_formatted
-            } else if (info["due_dates"] != null) {
-              data["due_date_display"] = I18n.t('multiple_due_dates', 'Multiple Due Dates');
+            } else if (info["vdd_tooltip"] != null) {
+              info['vdd_tooltip']['link_href'] = $context_module_item.find('a.title').attr('href');
+              $context_module_item.find('.due_date_display').html(vddTooltipView(info["vdd_tooltip"]));
             }
-            $("#context_module_item_" + id).fillTemplateData({data: data, htmlValues: ['points_possible_display']})
+            $context_module_item.fillTemplateData({data: data, htmlValues: ['points_possible_display']})
           });
+          vddTooltip();
         }, function() {
         });
       },
@@ -195,7 +249,7 @@ define([
       editModule: function($module) {
         var $form = $("#add_context_module_form");
         $form.data('current_module', $module);
-        var data = $module.getTemplateData({textValues: ['name', 'unlock_at', 'require_sequential_progress']});
+        var data = $module.getTemplateData({textValues: ['name', 'unlock_at', 'require_sequential_progress', 'publish_final_grade']});
         $form.fillFormData(data, {object_name: 'context_module'});
         var isNew = false;
         if($module.attr('id') == 'context_module_new') {
@@ -212,6 +266,7 @@ define([
         }
         $form.find("#unlock_module_at").prop('checked', data.unlock_at);
         $form.find("#require_sequential_progress").attr('checked', data.require_sequential_progress == "true" || data.require_sequential_progress == "1");
+        $form.find("#publish_final_grade").attr('checked', data.publish_final_grade == "true" || data.publish_final_grade == "1");
         $form.find(".prerequisites_entry").showIf($("#context_modules .context_module").length > 1);
         var prerequisites = [];
         $module.find(".prerequisites .criterion").each(function() {
@@ -273,13 +328,18 @@ define([
         data.new_tab = data.new_tab ? '1' : '0';
         var $item, $olditem = (data.id != 'new') ? $("#context_module_item_" + data.id) : [];
         if($olditem.length) {
-          $item = $olditem.clone(true).removeAttr('id');
-          $olditem.remove();
+          var admin = $olditem.find('.ig-admin');
+          if (admin.length) { admin.detach(); }
+          $item = $olditem.clone(true);
+          if (admin.length) {
+            $item.find('.ig-row').append(admin)
+          };
         } else {
           $item = $("#context_module_item_blank").clone(true).removeAttr('id');
         }
         $item.addClass(data.type + "_" + data.id);
         $item.addClass(data.type);
+        $item.attr('aria-label', data.title);
         $item.fillTemplateData({
           data: data,
           id: 'context_module_item_' + data.id,
@@ -300,10 +360,14 @@ define([
             }
           }
         });
-        if(!$before) {      
-          $module.find(".context_module_items").append($item.show());
+        if($olditem.length) {
+          $olditem.replaceWith($item.show());
         } else {
-          $before.before($item.show());
+          if(!$before) {
+            $module.find(".context_module_items").append($item.show());
+          } else {
+            $before.before($item.show());
+          }
         }
         return $item;
       },
@@ -406,30 +470,7 @@ define([
         placeholder: 'context_module_placeholder',
         forcePlaceholderSize: true,
         axis: 'y',
-        containment: "#context_modules",
-        update: function(event, ui) {
-          var $module = ui.item.parents(".context_module");
-          var url = $module.find(".reorder_items_url").attr('href');
-          $module.find(".content").loadingImage();
-          var items = [];
-          $module.find(".context_module_items .context_module_item").each(function() {
-            items.push($(this).getTemplateData({textValues: ['id']}).id);
-          });
-          $.ajaxJSON(url, 'POST', {order: items.join(",")}, function(data) {
-            $module.find(".content").loadingImage('remove');
-            if(data && data.context_module && data.context_module.content_tags) {
-              for(var idx in data.context_module.content_tags) {
-                var tag = data.context_module.content_tags[idx].content_tag;
-                $module.find("#context_module_item_" + tag.id).fillTemplateData({
-                  data: {position: tag.position}
-                });
-              }
-            }
-          }, function(data) {
-            $module.find(".content").loadingImage('remove');
-            $module.find(".content").errorBox(I18n.t('errors.reorder', 'Reorder failed, please try again.'));
-          });
-        }
+        containment: "#context_modules"
       }
     };
   })();
@@ -438,7 +479,8 @@ define([
   modules.initModuleManagement = function() {
     // Create the context modules backbone view to manage the publish button. 
     var context_modules_view = new ContextModulesView({
-      el: $("#content")
+      el: $("#content"),
+      modules: modules
     });
 
     $("#unlock_module_at").change(function() {
@@ -455,6 +497,7 @@ define([
     $(".context_module").bind('update', function(event, data) {
       data.context_module.unlock_at = $.parseFromISO(data.context_module.unlock_at).datetime_formatted;
       var $module = $("#context_module_" + data.context_module.id);
+      $module.attr('aria-label', data.context_module.name);
       $module.find(".header").fillTemplateData({
         data: data.context_module,
         hrefValues: ['id']
@@ -543,6 +586,22 @@ define([
         }
 
         $("#no_context_modules_message").slideUp();
+        var $publishIcon = $module.find('.publish-icon');
+        // new module, setup publish icon and other stuff
+        if (ENV.ENABLE_DRAFT && !$publishIcon.data('id')) {
+          var collapse = $module.find('h2.collapse_module_link');
+          var expand = $module.find('h2.collapse_module_link');
+          var href = collapse.attr('href');
+          $(collapse, expand).attr('href', href.replace('{{ id }}', data.context_module.id));
+          var publishData = {
+            moduleType: 'module',
+            id: data.context_module.id,
+            courseId: data.context_module.context_id,
+            published: data.context_module.workflow_state == 'published',
+            publishable: true
+          };
+          initPublishButton($publishIcon, publishData);
+        }
         $module.triggerHandler('update', data);
       },
       error: function(data, $module) {
@@ -745,12 +804,14 @@ define([
       event.preventDefault();
       var $module = $("#context_module_blank").clone(true).attr('id', 'context_module_new');
       $("#context_modules").append($module);
-        $module.find(".context_module_items").sortable(modules.sortable_module_options);
-        $("#context_modules.ui-sortable").sortable('refresh');
-        $("#context_modules .context_module .context_module_items.ui-sortable").each(function() {
-          $(this).sortable('refresh');
-          $(this).sortable('option', 'connectWith', '.context_module_items');
-        });
+      var opts = modules.sortable_module_options;
+      opts['update'] = modules.updateModuleItemPositions;
+      $module.find(".context_module_items").sortable(opts);
+      $("#context_modules.ui-sortable").sortable('refresh');
+      $("#context_modules .context_module .context_module_items.ui-sortable").each(function() {
+        $(this).sortable('refresh');
+        $(this).sortable('option', 'connectWith', '.context_module_items');
+      });
       modules.editModule($module);
     });
 
@@ -772,17 +833,18 @@ define([
         options.submit = function(item_data) {
           var $module = $("#context_module_" + module.id);
           var $item = modules.addItemToModule($module, item_data);
-          $module.find(".context_module_items.ui-sortable").sortable('refresh');
+          $module.find(".context_module_items.ui-sortable").sortable('refresh').sortable('disable');
           var url = $module.find(".add_module_item_link").attr('rel');
-          $item.loadingImage({image_size: 'small'});
-          $.ajaxJSON(url, 'POST', item_data, function(data) {
-            $item.loadingImage('remove');
-            $item.remove();
-            data.content_tag.type = item_data['item[type]'];
-            modules.addItemToModule($module, data.content_tag);
-            $module.find(".context_module_items.ui-sortable").sortable('refresh');
-            modules.updateAssignmentData();
-          });
+          $module.disableWhileLoading(
+            $.ajaxJSON(url, 'POST', item_data, function(data) {
+              $item.remove();
+              data.content_tag.type = item_data['item[type]'];
+              $item = modules.addItemToModule($module, data.content_tag);
+              $module.find(".context_module_items.ui-sortable").sortable('enable').sortable('refresh');
+              if (ENV.ENABLE_DRAFT) { initNewItemPublishButton($item, data.content_tag); }
+              modules.updateAssignmentData();
+            })
+          );
         };
         INST.selectContentDialog(options);
       }
@@ -868,7 +930,9 @@ define([
       var next = function() {
         if($items.length > 0) {
           var $item = $items.shift();
-          $item.sortable(modules.sortable_module_options);
+          var opts = modules.sortable_module_options;
+          opts['update'] = modules.updateModuleItemPositions;
+          $item.sortable(opts);
           setTimeout(next, 10);
         }
       };
@@ -878,30 +942,55 @@ define([
         helper: 'clone',
         containment: '#context_modules_sortable_container',
         axis: 'y',
-        update: function(event, ui) {
-          var ids = []
-          $("#context_modules .context_module").each(function() {
-            ids.push($(this).attr('id').substring('context_module_'.length));
-          });
-          var url = $(".reorder_modules_url").attr('href');
-          $("#context_modules").loadingImage();
-          $.ajaxJSON(url, 'POST', {order: ids.join(",")}, function(data) {
-            $("#context_modules").loadingImage('remove');
-            for(var idx in data) {
-              var module = data[idx];
-              $("#context_module_" + module.context_module.id).triggerHandler('update', module);
-            }
-          }, function(data) {
-            $("#context_modules").loadingImage('remove');
-          });
-        }
+        update: modules.updateModulePositions
       });
       modules.refreshModuleList();
       modules.refreshed = true;
     }, 1000);
   }
 
+  function initNewItemPublishButton($item, data) {
+    var publishData = {
+      moduleType: data.type,
+      id: data.publishable_id,
+      moduleId: data.context_module_id,
+      courseId: data.context_id,
+      published: data.published,
+      publishable: data.publishable
+    };
+    initPublishButton($item.find('.publish-icon'), publishData);
+  }
+
+  function initPublishButton($el, data) {
+    data = data || $el.data();
+    var model = new PublishableModuleItem({
+      module_type: data.moduleType,
+      id: data.id,
+      module_id: data.moduleId,
+      course_id: data.courseId,
+      published: data.published,
+      publishable: data.publishable
+    });
+    var view = new PublishIconView({model: model, el: $el[0]});
+    var row = $el.closest('.ig-row');
+    if (data.published) { row.addClass('ig-published'); }
+    // TODO: need to go find this item in other modules and update their state
+    view.on('publish', function() {
+      this.$el.closest('.ig-row').addClass('ig-published');
+    });
+    view.on('unpublish', function() {
+      this.$el.closest('.ig-row').removeClass('ig-published');
+    });
+    view.render()
+  }
+
   $(document).ready(function() {
+    if (ENV.ENABLE_DRAFT) {
+      $('.publish-icon:visible').each(function(index, el) {
+        initPublishButton($(el));
+      });
+    }
+
     $(".datetime_field").datetime_field();
 
     $(".context_module").live('mouseover', function() {
@@ -1008,8 +1097,8 @@ define([
       var reload_entries = $module.find(".content .context_module_items").children().length === 0;
       var toggle = function(show) {
         var callback = function() {
-          $module.find(".collapse_module_link").showIf($module.find(".content:visible").length > 0);
-          $module.find(".expand_module_link").showIf($module.find(".content:visible").length === 0);
+          $module.find(".collapse_module_link").css('display', $module.find(".content:visible").length > 0 ? 'inline-block' : 'none');
+          $module.find(".expand_module_link").css('display', $module.find(".content:visible").length === 0 ? 'inline-block' : 'none');
           if($module.find(".content:visible").length > 0) {
             $module.find(".footer .manage_module").css('display', '');
             $module.toggleClass('collapsed_module', false);
@@ -1211,9 +1300,13 @@ define([
       });
     });
     $(document).fragmentChange(function(event, hash) {
-      var module = $(hash.replace(/module/, "context_module"));
-      if (module.hasClass('collapsed_module')) {
-        module.find(".expand_module_link").triggerHandler('click');
+      if (hash == '#student_progressions') {
+        $(".module_progressions_link").trigger('click');
+      } else {
+        var module = $(hash.replace(/module/, "context_module"));
+        if (module.hasClass('collapsed_module')) {
+          module.find(".expand_module_link").triggerHandler('click');
+        }
       }
     });
 
@@ -1244,6 +1337,14 @@ define([
         $module.find(".expand_module_link:first").triggerHandler('click', true);
       }
     });
+
+    $('.module-publish-link').each(function(i, element){
+      var $el = $(element);
+      var model = new Publishable({ published: $el.hasClass('published'), id: $el.attr('data-id') }, { url: $el.attr('data-url'), root: 'module' });
+      var view = new PublishButtonView({model: model, el: $el});
+      view.render();
+    });
+
   });
 
   return modules;

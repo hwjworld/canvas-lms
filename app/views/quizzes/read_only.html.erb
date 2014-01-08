@@ -15,9 +15,8 @@
 <div style="display: none;" id="quiz_urls">
   <a href="<%= context_url(@context, :context_quiz_url, @quiz.id) %>" class="update_quiz_url">&nbsp;</a>
   <a href="<%= context_url(@context, :context_quiz_quiz_questions_url, @quiz.id) %>" class="add_question_url">&nbsp;</a>
-  <a href="<%= context_url(@context, :context_quiz_reorder_url, @quiz.id) %>" class="reorder_questions_url">&nbsp;</a>
+  <a href="<%= context_url(@context, :api_v1_context_quiz_reorder_url, @quiz.id) %>" class="reorder_questions_url">&nbsp;</a>
   <a href="<%= context_url(@context, :context_quiz_quiz_groups_url, @quiz.id) %>" class="add_group_url">&nbsp;</a>
-  <a href="<%= context_url(@context, :context_quiz_filters_url, @quiz.id) %>" class="filters_url">&nbsp;</a>
 </div>
 
 
@@ -33,7 +32,7 @@
     <% if question[:entry_type] == "quiz_group" %>
       <%= render :partial => "quizzes/question_group", :object => question %>
     <% else %>
-      <%= render :partial => (@quiz.quiz_questions.count > 25 ? "quizzes/question_teaser" : "quizzes/display_question"), :object => question, :locals => {:editing => true, :asset_string => "quiz_question_#{question['id']}"} %>
+      <%= render :partial => (@quiz.active_quiz_questions.size > 25 ? "quizzes/question_teaser" : "quizzes/display_question"), :object => question, :locals => {:editing => true, :asset_string => "quiz_question_#{question['id']}"} %>
     <% end %>
   <% end %>
 </div>

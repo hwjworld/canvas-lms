@@ -1,10 +1,12 @@
 define [
   'compiled/gradebook2/GRADEBOOK_TRANSLATIONS'
+  'str/htmlEscape'
   'jquery'
   'underscore'
   'compiled/gradebook2/Turnitin'
+  'compiled/util/round'
   'jquery.ajaxJSON'
-], (GRADEBOOK_TRANSLATIONS, $, _, {extractData}) ->
+], (GRADEBOOK_TRANSLATIONS, htmlEscape,$, _, {extractData},round) ->
 
   class SubmissionCell
 
@@ -23,7 +25,7 @@ define [
       @$input.focus()
 
     loadValue: () ->
-      @val = @opts.item[@opts.column.field].grade || ""
+      @val = htmlEscape @opts.item[@opts.column.field].grade || ""
       @$input.val(@val)
       @$input[0].defaultValue = @val
       @$input.select()
@@ -32,7 +34,7 @@ define [
       @$input.val()
 
     applyValue: (item, state) ->
-      item[@opts.column.field].grade = state
+      item[@opts.column.field].grade = htmlEscape state
       @wrapper?.remove()
       @postValue(item, state)
       # TODO: move selection down to the next row, same column
@@ -56,7 +58,12 @@ define [
       { valid: true, msg: null }
 
     @formatter: (row, col, submission, assignment) ->
-      this.prototype.cellWrapper(submission.grade, {submission: submission, assignment: assignment, editable: false})
+      grade = parseFloat submission.grade
+      grade = if isNaN(grade)
+        submission.grade
+      else
+        round(grade,round.DEFAULT)
+      this.prototype.cellWrapper(grade, {submission: submission, assignment: assignment, editable: false})
 
     cellWrapper: (innerContents, options = {}) ->
       opts = $.extend({}, {

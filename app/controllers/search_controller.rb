@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2013 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -22,7 +22,8 @@ class SearchController < ApplicationController
   include SearchHelper
   include Api::V1::Conversation
 
-  before_filter :get_context
+  before_filter :require_user
+  before_filter :get_context, except: :recipients
 
   def rubrics
     contexts = @current_user.management_contexts rescue []
@@ -32,7 +33,7 @@ class SearchController < ApplicationController
     end
     res += Rubric.publicly_reusable.matching(params[:q])
     res = res.select{|r| r.title.downcase.match(params[:q].downcase) }
-    render :json => res.to_json
+    render :json => res
   end
 
   # @API Find recipients
@@ -40,25 +41,40 @@ class SearchController < ApplicationController
   # can send messages to. The /api/v1/search/recipients path is the preferred
   # endpoint, /api/v1/conversations/find_recipients is deprecated.
   #
-  # Pagination is supported if an explicit type is given (but there is no last
-  # link). If no type is given, results will be limited to 10 by default (can
-  # be overridden via per_page).
+  # Pagination is supported.
   #
-  # @argument search Search terms used for matching users/courses/groups (e.g.
-  #   "bob smith"). If multiple terms are given (separated via whitespace),
-  #   only results matching all terms will be returned.
-  # @argument context Limit the search to a particular course/group (e.g.
-  #   "course_3" or "group_4").
-  # @argument exclude[] Array of ids to exclude from the search. These may be
-  #   user ids or course/group ids prefixed with "course_" or "group_" respectively,
+  # @argument search [String]
+  #   Search terms used for matching users/courses/groups (e.g. "bob smith"). If
+  #   multiple terms are given (separated via whitespace), only results matching
+  #   all terms will be returned.
+  #
+  # @argument context [String]
+  #   Limit the search to a particular course/group (e.g. "course_3" or "group_4").
+  #
+  # @argument exclude[] [String]
+  #   Array of ids to exclude from the search. These may be user ids or
+  #   course/group ids prefixed with "course_" or "group_" respectively,
   #   e.g. exclude[]=1&exclude[]=2&exclude[]=course_3
-  # @argument type ["user"|"context"] Limit the search just to users or contexts (groups/courses).
-  # @argument user_id [Integer] Search for a specific user id. This ignores the other above parameters, and will never return more than one result.
-  # @argument from_conversation_id [Integer] When searching by user_id, only users that could be normally messaged by this user will be returned. This parameter allows you to specify a conversation that will be referenced for a shared context -- if both the current user and the searched user are in the conversation, the user will be returned. This is used to start new side conversations.
-  # @argument permissions[] Array of permission strings to be checked for each
-  #   matched context (e.g. "send_messages"). This argument determines which
-  #   permissions may be returned in the response; it won't prevent contexts
-  #   from being returned if they don't grant the permission(s)
+  #
+  # @argument type [String, "user"|"context"]
+  #   Limit the search just to users or contexts (groups/courses).
+  #
+  # @argument user_id [Integer]
+  #   Search for a specific user id. This ignores the other above parameters,
+  #   and will never return more than one result.
+  #
+  # @argument from_conversation_id [Integer]
+  #   When searching by user_id, only users that could be normally messaged by
+  #   this user will be returned. This parameter allows you to specify a
+  #   conversation that will be referenced for a shared context -- if both the
+  #   current user and the searched user are in the conversation, the user will
+  #   be returned. This is used to start new side conversations.
+  #
+  # @argument permissions[] [String]
+  #   Array of permission strings to be checked for each matched context (e.g.
+  #   "send_messages"). This argument determines which permissions may be
+  #   returned in the response; it won't prevent contexts from being returned if
+  #   they don't grant the permission(s).
   #
   # @example_response
   #   [
@@ -85,98 +101,105 @@ class SearchController < ApplicationController
   #   permissions that the context grants the current user, e.g.
   #   { send_messages: true }
   def recipients
+    Shackles.activate(:slave) do
+      # admins may not be able to see the course listed at the top level (since
+      # they aren't enrolled in it), but if they search within it, we want
+      # things to work, so we set everything up here
 
-    # admins may not be able to see the course listed at the top level (since
-    # they aren't enrolled in it), but if they search within it, we want
-    # things to work, so we set everything up here
-    load_all_contexts :context => get_admin_search_context(params[:context]),
-                      :permissions => params[:permissions]
-
-    types = (params[:types] || [] + [params[:type]]).compact
-    types |= [:course, :section, :group] if types.delete('context')
-    types = if types.present?
-      {:user => types.delete('user').present?, :context => types.present? && types.map(&:to_sym)}
-    else
-      {:user => true, :context => [:course, :section, :group]}
-    end
-
-    @blank_fallback = !api_request?
-
-    max_results = Api.per_page_for(self)
-    if max_results < 1
-      if !types[:user] || params[:context]
-        max_results = nil # i.e. all results
-      else
-        max_results = params[:per_page] = 10
+      if params[:user_id]
+        params[:user_id] = api_find(User, params[:user_id]).id
       end
-    end
-    limit = max_results ? max_results + 1 : nil
-    page = params[:page].try(:to_i) || 1
-    offset = max_results ? (page - 1) * max_results : 0
-    exclude = params[:exclude] || []
 
-    recipients = []
-    if params[:user_id]
-      recipient = @current_user.load_messageable_user(params[:user_id], :conversation_id => params[:from_conversation_id], :admin_context => @admin_context)
-      if recipient
-        recipients = conversation_users_json([recipient], @current_user, session)
+      load_all_contexts :context => get_admin_search_context(params[:context]),
+                        :permissions => params[:permissions]
+
+      types = (params[:types] || [] + [params[:type]]).compact
+      types |= [:course, :section, :group] if types.delete('context')
+      types = if types.present?
+        {:user => types.delete('user').present?, :context => types.present? && types.map(&:to_sym)}
       else
-        recipients = []
+        {:user => true, :context => [:course, :section, :group]}
       end
-    elsif (params[:context] || params[:search])
-      options = {:search => params[:search], :context => params[:context], :limit => limit, :offset => offset, :synthetic_contexts => params[:synthetic_contexts]}
 
-      rank_results = params[:search].present?
-      contexts = types[:context] ? matching_contexts(options.merge(:rank_results => rank_results,
-                                                                   :include_inactive => params[:include_inactive],
-                                                                   :exclude_ids => MessageableUser.context_recipients(exclude),
-                                                                   :search_all_contexts => params[:search_all_contexts],
-                                                                   :types => types[:context])) : []
-      participants = types[:user] && !@skip_users ? matching_participants(options.merge(:rank_results => rank_results, :exclude_ids => MessageableUser.individual_recipients(exclude), :skip_visibility_checks => params[:skip_visibility_checks])) : []
-      if max_results
-        if types[:user] ^ types[:context]
-          recipients = contexts + participants
-          has_next_page = recipients.size > max_results
-          recipients = recipients[0, max_results]
-          recipients.instance_eval <<-CODE
-            def paginate(*args); self; end
-            def next_page; #{has_next_page ? page + 1 : 'nil'}; end
-            def previous_page; #{page > 1 ? page - 1 : 'nil'}; end
-            def total_pages; nil; end
-            def per_page; #{max_results}; end
-          CODE
-          recipients = Api.paginate(recipients, self, api_v1_search_recipients_url)
-        else
-          if contexts.size <= max_results / 2
-            recipients = contexts + participants
-          elsif participants.size <= max_results / 2
-            recipients = contexts[0, max_results - participants.size] + participants
-          else
-            recipients = contexts[0, max_results / 2] + participants
-          end
-          recipients = recipients[0, max_results]
+      @blank_fallback = !api_request?
+
+      params[:per_page] = nil if params[:per_page].to_i <= 0
+      exclude = params[:exclude] || []
+
+      recipients = []
+      if params[:user_id]
+        recipient = @current_user.load_messageable_user(params[:user_id], :conversation_id => params[:from_conversation_id], :admin_context => @admin_context)
+        recipients << recipient if recipient
+      elsif params[:context] || params[:search]
+        collections = []
+
+        if types[:context]
+          collections << ['contexts', search_messageable_contexts(
+            :search => params[:search],
+            :context => params[:context],
+            :synthetic_contexts => params[:synthetic_contexts],
+            :include_inactive => params[:include_inactive],
+            :exclude_ids => MessageableUser.context_recipients(exclude),
+            :search_all_contexts => params[:search_all_contexts],
+            :types => types[:context]
+          )]
         end
-      else
-        recipients = contexts + participants
+
+        if types[:user] && !@skip_users
+          collections << ['participants', @current_user.search_messageable_users(
+            :search => params[:search],
+            :context => params[:context],
+            :admin_context => @admin_context,
+            :exclude_ids => MessageableUser.individual_recipients(exclude),
+            :strict_checks => !params[:skip_visibility_checks]
+          )]
+        end
+
+        recipients = BookmarkedCollection.concat(*collections)
+        recipients = Api.paginate(recipients, self, api_v1_search_recipients_url)
       end
+
+      render :json => conversation_recipients_json(recipients, @current_user, session)
     end
-    render :json => recipients
   end
 
   private
 
-  def matching_participants(options)
-    conversation_users_json(@current_user.deprecated_search_messageable_users(options.merge(:admin_context => @admin_context)), @current_user, session, options.merge(:include_participant_avatars => true, :include_participant_contexts => true))
+  # stupid bookmarker that instantiates the whole collection and then
+  # "bookmarks" subsets of the collection by index. will want to improve this
+  # eventually, but for now it's no worse than the old way, and lets us compose
+  # the messageable contexts and messageable users for pagination.
+  class ContextBookmarker
+    def initialize(collection)
+      @collection = collection
+    end
+
+    def bookmark_for(item)
+      @collection.index(item)
+    end
+
+    def validate(bookmark)
+      bookmark.is_a?(Fixnum)
+    end
+
+    def self.wrap(collection)
+      BookmarkedCollection.build(self.new(collection)) do |pager|
+        page_start = pager.current_bookmark ? pager.current_bookmark + 1 : 0
+        page_end = page_start + pager.per_page
+        pager.replace collection[page_start, page_end]
+        pager.has_more! if collection.size > page_end
+        pager
+      end
+    end
+  end
+
+  def search_messageable_contexts(options={})
+    ContextBookmarker.wrap(matching_contexts(options))
   end
 
   def matching_contexts(options)
     context_name = options[:context]
     avatar_url = avatar_url_for_group(blank_fallback)
-    user_counts = {
-      :course => @current_user.enrollment_visibility[:user_counts],
-      :group => @current_user.group_membership_visibility[:user_counts],
-      :section => @current_user.enrollment_visibility[:section_user_counts]
-    }
     terms = options[:search].to_s.downcase.strip.split(/\s+/)
     exclude = options[:exclude_ids] || []
 
@@ -184,7 +207,7 @@ class SearchController < ApplicationController
     if context_name.nil?
       result = if terms.blank?
                  courses = @contexts[:courses].values
-                 group_ids = @current_user.current_groups.map(&:id)
+                 group_ids = @current_user.current_groups.with_each_shard.map(&:id)
                  groups = @contexts[:groups].slice(*group_ids).values
                  courses + groups
                else
@@ -220,25 +243,33 @@ class SearchController < ApplicationController
       end
     end
 
-    result = if options[:rank_results]
+    result = if options[:search].present?
       result.sort_by{ |context|
         [
           context_state_ranks[context[:state]],
           context_type_ranks[context[:type]],
-          context[:name].downcase
+          Canvas::ICU.collation_key(context[:name]),
+          context[:id]
         ]
       }
     else
-      result.sort_by{ |context| context[:name].downcase }
+      result.sort_by{ |context|
+        [
+          Canvas::ICU.collation_key(context[:name]),
+          context[:id]
+        ]
+      }
     end
+
     result = result.reject{ |context| context[:state] == :inactive } unless options[:include_inactive]
     result = result.map{ |context|
+      asset_string = "#{context[:type]}_#{context[:id]}"
       ret = {
-        :id => "#{context[:type]}_#{context[:id]}",
+        :id => asset_string,
         :name => context[:name],
         :avatar_url => avatar_url,
         :type => :context,
-        :user_count => user_counts[context[:type]][context[:id]],
+        :user_count => @current_user.count_messageable_users_in_context(asset_string),
         :permissions => context[:permissions] || {}
       }
       if context[:type] == :section
@@ -254,9 +285,7 @@ class SearchController < ApplicationController
 
     result.reject!{ |context| terms.any?{ |part| !context[:name].downcase.include?(part) } } if terms.present?
     result.reject!{ |context| exclude.include?(context[:id]) }
-
-    offset = options[:offset] || 0
-    options[:limit] ? result[offset, offset + options[:limit]] : result
+    result
   end
 
   def course_for_section(section)

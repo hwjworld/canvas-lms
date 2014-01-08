@@ -44,12 +44,12 @@
 #       // an abbreviated OutcomeGroup object representing the parent group of
 #       // this outcome group, if any. omitted in the abbreviated form.
 #       "parent_outcome_group": {
-#         "id": ...,
-#         "url": ...,
-#         "title": ...,
-#         "subgroups_url": ...,
-#         "outcomes_url": ...,
-#         "can_edit": ...
+#         "id": 1337,
+#         "url": "http://...",
+#         "title": "title",
+#         "subgroups_url": "http://...",
+#         "outcomes_url": "http://...",
+#         "can_edit": true
 #       },
 #
 #       // the context owning the outcome group. may be null for global outcome
@@ -62,6 +62,9 @@
 #
 #       // description of the outcome group. omitted in the abbreviated form.
 #       "description": "Outcome group description",
+#
+#       // A custom GUID for the learning standard.
+#       "vendor_guid": "customid9000",
 #
 #       // the URL for listing/creating subgroups under the outcome group.
 #       // should be treated as opaque
@@ -80,7 +83,6 @@
 #     }
 #
 # @object OutcomeLink
-#
 #     {
 #       // the URL for fetching/updating the outcome link. should be treated as
 #       // opaque
@@ -96,22 +98,24 @@
 #       // the outcome link.
 #       "outcome_group": {
 #         "id": 1,
-#         "url": ...,
-#         "title": ...,
-#         "subgroups_url": ...,
-#         "outcomes_url": ...,
-#         "can_edit": ...
+#         "url": "http://...",
+#         "title": "title",
+#         "vendor_guid": "af827ef88a",
+#         "subgroups_url": "http://...",
+#         "outcomes_url": "http://...",
+#         "can_edit": true
 #       },
 #
 #       // an abbreviated Outcome object representing the outcome linked into
 #       // the containing outcome group.
 #       "outcome": {
 #         "id": 1,
-#         "url": ...,
-#         "context_id": ...,
-#         "context_type": ...,
-#         "title": ...,
-#         "can_edit": ...
+#         "url": "http://...",
+#         "vendor_guid": "af827ef88a",
+#         "context_id": 3392,
+#         "context_type": "Course",
+#         "title": "title",
+#         "can_edit": true
 #       }
 #     }
 #
@@ -155,28 +159,38 @@ class OutcomeGroupsApiController < ApplicationController
   # the same context as this outcome group, and must not be a descendant of
   # this outcome group (i.e. no cycles allowed).
   #
-  # @argument title [Optional] The new outcome group title.
-  # @argument description [Optional] The new outcome group description.
-  # @argument parent_outcome_group_id [Optional, Integer] The id of the new parent outcome group.
+  # @argument title [Optional, String]
+  #   The new outcome group title.
+  #
+  # @argument description [Optional, String]
+  #   The new outcome group description.
+  #
+  # @argument vendor_guid [Optional, String]
+  #   A custom GUID for the learning standard.
+  #
+  # @argument parent_outcome_group_id [Optional, Integer]
+  #   The id of the new parent outcome group.
   #
   # @returns OutcomeGroup
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \
   #        -X PUT \ 
   #        -F 'title=Outcome Group Title' \ 
-  #        -F 'description=Outcome group description' \ 
+  #        -F 'description=Outcome group description' \
+  #        -F 'vendor_guid=customid9000' \
   #        -F 'parent_outcome_group_id=1' \ 
   #        -H "Authorization: Bearer <token>"
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \
   #        -X PUT \ 
   #        --data-binary '{
   #              "title": "Outcome Group Title",
   #              "description": "Outcome group description",
+  #              "vendor_guid": "customid9000",
   #              "parent_outcome_group_id": 1
   #            }' \ 
   #        -H "Content-Type: application/json" \ 
@@ -189,7 +203,7 @@ class OutcomeGroupsApiController < ApplicationController
         render :json => 'error'.to_json, :status => :bad_request
         return
       end
-      @outcome_group.update_attributes(params.slice(:title, :description))
+      @outcome_group.update_attributes(params.slice(:title, :description, :vendor_guid))
       if params[:parent_outcome_group_id] && params[:parent_outcome_group_id] != @outcome_group.learning_outcome_group_id
         new_parent = context_outcome_groups.find(params[:parent_outcome_group_id])
         unless new_parent.adopt_outcome_group(@outcome_group)
@@ -219,7 +233,7 @@ class OutcomeGroupsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/2.json' \
   #        -X DELETE \ 
   #        -H "Authorization: Bearer <token>"
   #
@@ -231,7 +245,9 @@ class OutcomeGroupsApiController < ApplicationController
         return
       end
       begin
+        @outcome_group.skip_tag_touch = true
         @outcome_group.destroy
+        @context.try(:touch)
         render :json => outcome_group_json(@outcome_group, @current_user, session)
       rescue ActiveRecord::RecordNotSaved
         render :json => 'error'.to_json, :status => :bad_request
@@ -320,27 +336,42 @@ class OutcomeGroupsApiController < ApplicationController
   # default of 0. If no ratings are provided, the mastery_points parameter is
   # ignored.
   #
-  # @argument outcome_id [Optional, Integer] The ID of the existing outcome to link.
-  # @argument title [Optional] The title of the new outcome. Required if outcome_id is absent.
-  # @argument description [Optional] The description of the new outcome.
-  # @argument mastery_points [Optional, Integer] The mastery threshold for the embedded rubric criterion.
-  # @argument ratings[][description] [Optional] The description of a rating level for the embedded rubric criterion.
-  # @argument ratings[][points] [Optional, Integer] The points corresponding to a rating level for the embedded rubric criterion.
+  # @argument outcome_id [Optional, Integer]
+  #   The ID of the existing outcome to link.
+  #
+  # @argument title [Optional, String]
+  #   The title of the new outcome. Required if outcome_id is absent.
+  #
+  # @argument description [Optional, String]
+  #   The description of the new outcome.
+  #
+  # @argument vendor_guid [Optional, String]
+  #   A custom GUID for the learning standard.
+  #
+  # @argument mastery_points [Optional, Integer]
+  #   The mastery threshold for the embedded rubric criterion.
+  #
+  # @argument ratings[][description] [Optional, String]
+  #   The description of a rating level for the embedded rubric criterion.
+  #
+  # @argument ratings[][points] [Optional, Integer]
+  #   The points corresponding to a rating level for the embedded rubric criterion.
   #
   # @returns OutcomeLink
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes/1.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes/1.json' \
   #        -X PUT \ 
   #        -H "Authorization: Bearer <token>"
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes.json' \
   #        -X POST \ 
   #        -F 'title=Outcome Title' \ 
-  #        -F 'description=Outcome description' \ 
+  #        -F 'description=Outcome description' \
+  #        -F 'vendor_guid=customid9000' \
   #        -F 'mastery_points=3' \ 
   #        -F 'ratings[][description]=Exceeds Expectations' \ 
   #        -F 'ratings[][points]=5' \ 
@@ -352,11 +383,12 @@ class OutcomeGroupsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes.json' \
   #        -X POST \ 
   #        --data-binary '{
   #              "title": "Outcome Title",
   #              "description": "Outcome description",
+  #              "vendor_guid": "customid9000",
   #              "mastery_points": 3,
   #              "ratings": [
   #                { "description": "Exceeds Expectations", "points": 5 },
@@ -377,7 +409,7 @@ class OutcomeGroupsApiController < ApplicationController
           return
         end
       else
-        @outcome = context_create_outcome(params.slice(:title, :description, :ratings, :mastery_points))
+        @outcome = context_create_outcome(params.slice(:title, :description, :ratings, :mastery_points, :vendor_guid))
         unless @outcome.valid?
           render :json => @outcome.errors, :status => :bad_request
           return
@@ -399,7 +431,7 @@ class OutcomeGroupsApiController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes/1.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/outcomes/1.json' \
   #        -X DELETE \ 
   #        -H "Authorization: Bearer <token>"
   #
@@ -448,26 +480,34 @@ class OutcomeGroupsApiController < ApplicationController
   # Creates a new empty subgroup under the outcome group with the given title
   # and description.
   #
-  # @argument title [Required] The title of the new outcome group.
-  # @argument description [Optional] The description of the new outcome group.
+  # @argument title [String]
+  #   The title of the new outcome group.
+  #
+  # @argument description [Optional, String]
+  #   The description of the new outcome group.
+  #
+  # @argument vendor_guid [Optional, String]
+  #   A custom GUID for the learning standard
   #
   # @returns OutcomeGroup
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/subgroups.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/subgroups.json' \
   #        -X POST \ 
   #        -F 'title=Outcome Group Title' \ 
-  #        -F 'description=Outcome group description' \ 
+  #        -F 'description=Outcome group description' \
+  #        -F 'vendor_guid=customid9000' \
   #        -H "Authorization: Bearer <token>"
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/1/outcome_groups/1/subgroups.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/1/outcome_groups/1/subgroups.json' \
   #        -X POST \ 
   #        --data-binary '{
   #              "title": "Outcome Group Title",
-  #              "description": "Outcome group description"
+  #              "description": "Outcome group description",
+  #              "vendor_guid": "customid9000"
   #            }' \ 
   #        -H "Content-Type: application/json" \ 
   #        -H "Authorization: Bearer <token>"
@@ -475,7 +515,7 @@ class OutcomeGroupsApiController < ApplicationController
   def create
     if can_manage_outcomes
       @outcome_group = context_outcome_groups.find(params[:id])
-      @child_outcome_group = @outcome_group.child_outcome_groups.build(params.slice(:title, :description))
+      @child_outcome_group = @outcome_group.child_outcome_groups.build(params.slice(:title, :description, :vendor_guid))
       if @child_outcome_group.save
         render :json => outcome_group_json(@child_outcome_group, @current_user, session)
       else
@@ -499,13 +539,14 @@ class OutcomeGroupsApiController < ApplicationController
   # outcome group, or from an associated account. The source group cannot be
   # the root outcome group of its context.
   #
-  # @argument source_outcome_group_id [Required, Integer] The ID of the source outcome group.
+  # @argument source_outcome_group_id [Integer]
+  #   The ID of the source outcome group.
   #
   # @returns OutcomeGroup
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/accounts/2/outcome_groups/3/import.json' \ 
+  #   curl 'https://<canvas>/api/v1/accounts/2/outcome_groups/3/import.json' \
   #        -X POST \ 
   #        -F 'source_outcome_group_id=2' \ 
   #        -H "Authorization: Bearer <token>"
@@ -576,7 +617,7 @@ class OutcomeGroupsApiController < ApplicationController
 
   def context_create_outcome(data)
     scope = @context ? @context.created_learning_outcomes : LearningOutcome.global
-    outcome = scope.build(data.slice(:title, :description))
+    outcome = scope.build(data.slice(:title, :description, :vendor_guid))
     if data[:ratings]
       outcome.rubric_criterion = data.slice(:ratings, :mastery_points)
     end

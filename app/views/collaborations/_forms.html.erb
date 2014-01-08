@@ -1,4 +1,4 @@
-<% form_for([@context, Collaboration.new], :html => { :target => '_blank',
+<%= form_for([@context, Collaboration.new], :html => { :target => '_blank',
                                                       :style => 'display: none; margin-top: 10px;' }) do |f| %>
 <h2 tabindex="-1"><%= t 'titles.new', "Start a New Collaboration" %></h2>
 <table class="formtable">
@@ -27,11 +27,10 @@
   </tr><tr id="etherpad_description" style="display: none;" class="collaboration_type">
     <td colspan="2" style="padding: 5px 20px 10px">
       <%= image_tag "ether_pad.png", :style => "float: right; margin-left: 15px; margin-top: 5px;" %>
-      <%= t 'descriptions.etherpad', %{EtherPad is an open source project that lets you quickly set
-      up shared documents.  It's fast enough that you can see what others are typing as they're
-      typing it. On the other hand, "pads" aren't protected by a password so anyone with a link to them
-      can edit them. EtherPad is better suited than Google Docs if you want to support anonymity and/or
-      allowing people without Google accounts to participate.} %>
+      <%= mt 'descriptions.etherpad', <<-HEREDOC, :etherpad_deletion_policy_url => "http://titanpad.com/ep/pro-help/#deletionpolicy"
+EtherPad is an open source project that lets you quickly set up shared documents.  It's fast enough that you can see what others are typing as they're typing it. On the other hand, "pads" aren't protected by a password so anyone with a link to them can edit them. EtherPad is better suited than Google Docs if you want to support anonymity and/or allowing people without Google accounts to participate.  \n  \n**Warning**: be sure you are familiar with [EtherPad's deletion policy](%{etherpad_deletion_policy_url}) to ensure your work is preserved.
+HEREDOC
+        %>
     </td>
   </tr><tr class="collaborate_data">
     <td style="white-space: nowrap">
@@ -77,7 +76,7 @@
   <button type="button" class="btn delete_button"><%= mt 'buttons.delete_from_google_docs', "Also Delete From  \nGoogle Docs" %></button>
   </div>
 </div>
-<% form_tag(context_url(@context, :context_collaboration_url, "{{ id }}"), {:id => "edit_collaboration_form", :method => :put, :style => "display: none; margin-top: 10px;", :class => 'collaboration communication_message'}) do %>
+<%= form_tag(context_url(@context, :context_collaboration_url, "{{ id }}"), {:id => "edit_collaboration_form", :method => :put, :style => "display: none; margin-top: 10px;", :class => 'collaboration communication_message'}) do %>
   <div class="header">
     <%= text_field :collaboration, :title, :style => "width: 300px;", :value => t('collaboration_name', "%{course_or_group_name} Collaboration", :course_or_group_name => @context.name) %>
   </div>

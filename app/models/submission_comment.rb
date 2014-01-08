@@ -44,9 +44,7 @@ class SubmissionComment < ActiveRecord::Base
 
   serialize :cached_attachments
 
-  named_scope :for_assignment_id, lambda { |assignment_id|
-    { :conditions => ['submissions.assignment_id = ?', assignment_id], :joins => :submission }
-  }
+  scope :for_assignment_id, lambda { |assignment_id| where(:submissions => { :assignment_id => assignment_id }).joins(:submission) }
 
   def delete_other_comments_in_this_group
     return if !self.group_comment_id || @skip_destroy_callbacks
@@ -124,7 +122,7 @@ class SubmissionComment < ActiveRecord::Base
   end
 
   def reply_from(opts)
-    raise IncomingMessageProcessor::UnknownAddressError if self.context.root_account.deleted?
+    raise IncomingMail::IncomingMessageProcessor::UnknownAddressError if self.context.root_account.deleted?
     user = opts[:user]
     message = opts[:text].strip
     user = nil unless user && self.context.users.include?(user)
@@ -153,13 +151,17 @@ class SubmissionComment < ActiveRecord::Base
   end
 
   def attachments=(attachments)
-    # Accept attachments that were already approved, those that were just created
-    # or those that were part of some outside context.  This is all to prevent
-    # one student from sneakily getting access to files in another user's comments,
-    # since they're all being held on the assignment for now.
+    # Accept attachments that were already approved, just created, or approved
+    # elsewhere.  This is all to prevent one student from sneakily getting
+    # access to files in another user's comments, since they're all being held
+    # on the assignment for now.
     attachments ||= []
     old_ids = (self.attachment_ids || "").split(",").map{|id| id.to_i}
-    write_attribute(:attachment_ids, attachments.select{|a| old_ids.include?(a.id) || a.recently_created || a.context != self.submission.assignment }.map{|a| a.id}.join(","))
+    write_attribute(:attachment_ids, attachments.select { |a|
+      old_ids.include?(a.id) ||
+      a.recently_created ||
+      a.ok_for_submission_comment
+    }.map{|a| a.id}.join(","))
   end
 
   def infer_details
@@ -175,16 +177,22 @@ class SubmissionComment < ActiveRecord::Base
 
 
   def attachments
-    ids = (self.attachment_ids || "").split(",").map{|id| id.to_i}
+    ids = Set.new((attachment_ids || "").split(",").map { |id| id.to_i})
     attachments = associated_attachments
-    attachments += self.submission.assignment.attachments rescue []
-    attachments.select{|a| ids.include?(a.id) }
+    attachments += submission.assignment.attachments rescue []
+    attachments.select { |a| ids.include?(a.id) }
+  end
+
+  def self.preload_attachments(comments)
+    SubmissionComment.send :preload_associations, comments, [:associated_attachments, :submission]
+    submissions = comments.map(&:submission).uniq
+    Submission.send :preload_associations, submissions, :assignment => :attachments
   end
 
   def update_submission
     return nil if hidden?
-    comments_count = SubmissionComment.count(:conditions => { :submission_id => submission_id, :hidden => false })
-    Submission.update_all({ :submission_comments_count => comments_count }, { :id => submission_id }) rescue nil
+    comments_count = SubmissionComment.where(:submission_id => submission_id, :hidden => false).count
+    Submission.where(:id => submission_id).update_all(:submission_comments_count => comments_count) rescue nil
   end
 
   def formatted_body(truncate=nil)
@@ -210,23 +218,14 @@ class SubmissionComment < ActiveRecord::Base
     !hidden? && submission.possible_participants_ids.include?(author_id)
   end
 
-  alias_method :ar_to_json, :to_json
-  def to_json(options = {}, &block)
-    if self.context.root_account.service_enabled?(:avatars)
-      options[:methods] ||= []
-      options[:methods] << :avatar_path
-    end
-    self.ar_to_json(options, &block)
+  def serialization_methods
+    context.root_account.service_enabled?(:avatars) ? [:avatar_path] : []
   end
 
-  named_scope :visible, :conditions => { :hidden => false }
+  scope :visible, where(:hidden => false)
 
-  named_scope :after, lambda{|date|
-    {:conditions => ['submission_comments.created_at > ?', date] }
-  }
-  named_scope :for_context, lambda{|context|
-    {:conditions => ['submission_comments.context_id = ? AND submission_comments.context_type = ?', context.id, context.class.to_s] }
-  }
+  scope :after, lambda { |date| where("submission_comments.created_at>?", date) }
+  scope :for_context, lambda { |context| where(:context_id => context, :context_type => context.class.to_s) }
 
   def update_participation
     # id_changed? because new_record? is false in after_save callbacks

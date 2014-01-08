@@ -4,6 +4,7 @@
   <meta http-equiv=Content-type content="text/html; charset=utf-8">
   <title>Tests</title>
   <link rel="stylesheet" href="support/qunit/qunit.css" type="text/css">
+  <link rel="stylesheet" href="../../public/stylesheets/compiled/g_base.css" type="text/css">
   <style>
   body {
     font-family: 'Helvetica', 'Verdana';
@@ -34,7 +35,8 @@
   <div id="fixtures"></div>
 
   <script src="support/qunit/qunit.js"></script>
-  <script src="support/sinon/sinon-1.5.2.js"></script>
+  <script src="support/sinon/sinon-1.7.3.js"></script>
+  <script src="support/sinon/sinon-patch.js"></script>
   <script src="support/sinon/sinon-qunit-1.0.0.js"></script>
   <script>
     if (location.hash === '#testem') document.write('<script src="/testem.js"></'+'script>')
@@ -57,7 +59,7 @@
         },
         {
           name: 'helpers',
-          location: '../../spec/javascripts/helpers',
+          location: '../../spec/javascripts/compiled/helpers',
           main: 'helpers',
           lib: './'
         },
@@ -97,11 +99,39 @@
       };
     })();
 
-    // don't run specs until they are all loaded
-    stop();
-    require(<%= Dir["spec/javascripts/#{matcher}"].map{ |file| file.sub(/\.js$/, '') }.inspect %>, function() {
-      // run specs once they've all loaded
-      start();
+    // start loading specs now. if there's a callback by the time they finish
+    // loading, execute it.
+    var specsLoading = true;
+    var onSpecsLoaded = null;
+    require(<%=
+      Dir[
+        "public/javascripts/#{matcher}",
+        "spec/javascripts/compiled/#{matcher}",
+        "spec/plugins/*/javascripts/compiled/#{matcher}"
+      ].map{ |file| file.sub(/\.js$/, '').sub(/public\/javascripts\//, '') }.inspect
+    %>, function() {
+      specsLoading = false;
+      if (onSpecsLoaded) onSpecsLoaded();
+    });
+
+    // don't try and start right when QUnit.load finishes. we want to check
+    // spec loading status.
+    QUnit.config.autostart = false;
+
+    QUnit.begin(function() {
+      // callback executed at start of QUnit.load, but we need to let it finish
+      // first
+      setTimeout(function() {
+        // QUnit loaded and initialized. are the specs all loaded?
+        if (specsLoading) {
+          // if not, we need to wait for them before starting. fortunately, we
+          // have a nifty onSpecsLoaded callback just for that.
+          onSpecsLoaded = function() { QUnit.start(); };
+        } else {
+          // they are! get going
+          QUnit.start();
+        }
+      });
     });
   </script>
 

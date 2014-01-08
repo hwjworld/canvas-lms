@@ -1,39 +1,103 @@
+require 'timeout'
+
 namespace :js do
 
+  desc 'run testem as you develop, can use `rake js:dev <ember app name>`'
   task :dev do
+    app = ARGV[1]
+    if app
+      ENV['JS_SPEC_MATCHER'] = matcher_for_ember_app app
+      unless File.exists?("app/coffeescripts/ember/#{app}")
+        puts "no app found at app/coffeescripts/ember/#{app}"
+        exit
+      end
+    end
     Rake::Task['js:generate_runner'].invoke
     exec('testem -f config/testem.yml')
   end
 
+  def matcher_for_ember_app app_name
+    "**/#{app_name}/**/*.spec.js"
+  end
+
   desc 'generate QUnit runner file @ spec/javascripts/runner.html'
   task :generate_runner do
-    #Rake::Task['js:generate'].invoke
+    build_runner
+  end
+
+  def build_runner
     require 'canvas/require_js'
     require 'erubis'
     output = Erubis::Eruby.new(File.read("#{Rails.root}/spec/javascripts/runner.html.erb")).
-      result(Canvas::RequireJs.get_binding)
+        result(Canvas::RequireJs.get_binding)
     File.open("#{Rails.root}/spec/javascripts/runner.html", 'w') { |f| f.write(output) }
   end
 
   desc 'test javascript specs with PhantomJS'
   task :test do
-    quick = ENV["quick"] && ENV["quick"] == "true"
-    unless quick
-      puts "--> do rake js:test quick=true to skip generating compiled coffeescript and handlebars."
-      Rake::Task['js:generate'].invoke
+    require 'canvas/require_js'
+
+    # run test for each ember app individually
+    Dir.entries('app/coffeescripts/ember').reject { |d| d.match(/^\./) || d == 'shared' }.each do |ember_app|
+      puts "--> Running tests for '#{ember_app}' ember app"
+      Canvas::RequireJs.matcher = matcher_for_ember_app ember_app
+      test_suite
     end
-    puts "--> executing phantomjs tests"
-    Rake::Task['js:generate_runner'].invoke
-    phantomjs_output = `phantomjs spec/javascripts/support/qunit/test.js file:///#{Dir.pwd}/spec/javascripts/runner.html`
-    exit_status = $?.exitstatus
-    puts phantomjs_output
-    raise "PhantomJS tests failed" if exit_status != 0
+
+    # run test for non-ember apps
+    Canvas::RequireJs.matcher = nil
+    test_suite
+  end
+
+  def test_suite
+    if test_js_with_timeout(300) != 0 && !ENV['JS_SPEC_MATCHER']
+      puts "--> PhantomJS tests failed. retrying PhantomJS..."
+      raise "PhantomJS tests failed on second attempt." if test_js_with_timeout(400) != 0
+    end
+  end
+
+  def test_js_with_timeout(timeout)
+    require 'canvas/require_js'
+    begin
+      Timeout::timeout(timeout) do
+        quick = ENV["quick"] && ENV["quick"] == "true"
+        unless quick
+          puts "--> do rake js:test quick=true to skip generating compiled coffeescript and handlebars."
+          Rake::Task['js:generate'].invoke
+        end
+        puts "--> executing phantomjs tests"
+        build_runner
+        phantomjs_output = `phantomjs spec/javascripts/support/qunit/test.js file:///#{Dir.pwd}/spec/javascripts/runner.html 2>&1`
+        puts phantomjs_output
+
+        if $?.exitstatus != 0
+          puts 'some specs failed'
+          result = 1
+        elsif ENV['JS_SPEC_MATCHER'] || Canvas::RequireJs.matcher
+          # running a subset of tests in isolation, don't be paranoid about
+          # some unrun tests getting lost
+          result = 0
+        elsif phantomjs_output.match(/^Took .* (\d+) tests/)[1].to_i < 2000
+          # ran all tests but didn't see enough? do be paranoid about some
+          # unrun tests getting lost
+          puts 'all run specs passed, but not all specs were run'
+          result = 1
+        else
+          # good exit status, and it seems enough specs ran to assuage our
+          # paranoia
+          result = 0
+        end
+        return result
+      end
+    rescue Timeout::Error
+      puts "PhantomJS tests reached timeout!"
+    end
   end
 
   def coffee_destination(dir_or_file)
     dir_or_file.sub('app/coffeescripts', 'public/javascripts/compiled').
-                sub('spec/coffeescripts', 'spec/javascripts').
-                sub(%r{/javascripts/compiled/plugins/([^/]+)(/|$)}, '/plugins/\\1/javascripts/compiled\\2')
+        sub('spec/coffeescripts', 'spec/javascripts/compiled').
+        sub(%r{/javascripts/compiled/plugins/([^/]+)(/|$)}, '/plugins/\\1/javascripts/compiled\\2')
   end
 
   def compile_coffeescript(coffee_file)
@@ -46,7 +110,13 @@ namespace :js do
     end
   end
 
-  desc "generates compiled coffeescript and handlebars templates"
+  desc "generates plugin extension modules"
+  task :generate_extensions do
+    require 'canvas/require_js/plugin_extension'
+    Canvas::RequireJs::PluginExtension.generate_all
+  end
+
+  desc "generates compiled coffeescript, handlebars templates and plugin extensions"
   task :generate do
     require 'config/initializers/plugin_symlinks'
     require 'fileutils'
@@ -56,18 +126,36 @@ namespace :js do
     # clear out all the files in case there are any old compiled versions of
     # files that don't map to any source file anymore
     paths_to_remove = [
-      'public/javascripts/compiled',
-      'public/javascripts/jst',
-      'public/plugins/*/javascripts/{compiled,javascripts/jst}'
-    ] + Dir.glob('spec/javascripts/**/*Spec.js')
+      Dir.glob('public/javascripts/{compiled,jst}'),
+      Dir.glob('public/plugins/*/javascripts/{compiled,jst}'),
+      'spec/javascripts/compiled',
+      Dir.glob('spec/plugins/*/javascripts/compiled')
+    ]
     FileUtils.rm_rf(paths_to_remove)
 
     threads = []
+    threads << Thread.new do
+      puts "--> Generating plugin extensions"
+      extensions_time = Benchmark.realtime { Rake::Task['js:generate_extensions'].invoke }
+      puts "--> Generating plugin extensions finished in #{extensions_time}"
+    end
+
     threads << Thread.new do
       puts "--> Pre-compiling handlebars templates"
       handlebars_time = Benchmark.realtime { Rake::Task['jst:compile'].invoke }
       puts "--> Pre-compiling handlebars templates finished in #{handlebars_time}"
     end
+
+    threads << Thread.new do
+      puts "--> Pre-compiling ember handlebars templates"
+      ember_handlebars_time = Benchmark.realtime { Rake::Task['jst:ember'].invoke }
+      puts "--> Pre-compiling ember handlebars templates finished in #{ember_handlebars_time}"
+    end
+
+    # can't be in own thread, needs to happen before coffeescript
+    puts "--> Creating ember app bundles"
+    bundle_time = Benchmark.realtime { Rake::Task['js:bundle_ember_apps'].invoke }
+    puts "--> Creating ember app bundles finished in #{bundle_time}"
 
     threads << Thread.new do
       coffee_time = Benchmark.realtime do
@@ -80,7 +168,7 @@ namespace :js do
           Parallel.each(dirs, :in_threads => Parallel.processor_count) do |dir|
             destination = coffee_destination(dir)
             FileUtils.mkdir_p(destination)
-            system("coffee -c -o #{destination} #{dir}/*.coffee")
+            system("coffee -m -c -o #{destination} #{dir}/*.coffee")
             raise "Unable to compile coffeescripts in #{dir}" if $?.exitstatus != 0
           end
         else
@@ -104,7 +192,7 @@ namespace :js do
     require 'erubis'
 
     output = Erubis::Eruby.new(File.read("#{Rails.root}/config/build.js.erb")).
-      result(Canvas::RequireJs.get_binding)
+        result(Canvas::RequireJs.get_binding)
     File.open("#{Rails.root}/config/build.js", 'w') { |f| f.write(output) }
 
     puts "--> Optimizing canvas-lms"
@@ -113,6 +201,14 @@ namespace :js do
       raise "Error running js:build: \n#{output}\nABORTING" if $?.exitstatus != 0
     end
     puts "--> Optimized canvas-lms in #{optimize_time}"
+  end
+
+  desc "creates ember app bundles"
+  task :bundle_ember_apps do
+    require 'lib/ember_bundle'
+    Dir.entries('app/coffeescripts/ember').reject { |d| d.match(/^\./) || d == 'shared' }.each do |app|
+      EmberBundle.new(app).build
+    end
   end
 
 end

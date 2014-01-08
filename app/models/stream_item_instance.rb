@@ -23,7 +23,7 @@ class StreamItemInstance < ActiveRecord::Base
   belongs_to :stream_item
   belongs_to :context, :polymorphic => true
 
-  validates_presence_of :stream_item_id
+  validates_presence_of :stream_item_id, :user_id, :context_id, :context_type
 
   attr_accessible :user, :stream_item, :context
 
@@ -44,9 +44,9 @@ class StreamItemInstance < ActiveRecord::Base
 
     # Runs update_all() and also invalidates cache keys for the array of contexts (a context
     # is an array of [context_type, context_id])
-    def update_all_with_invalidation(contexts, updates, conditions = nil, options = {})
+    def update_all_with_invalidation(contexts, updates)
       contexts.each { |context| StreamItemCache.invalidate_context_stream_item_key(context.first, context.last) }
-      self.original_update_all(updates, conditions, options)
+      self.original_update_all(updates)
     end
   end
 

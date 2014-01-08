@@ -59,12 +59,12 @@ class UserList
   
   attr_reader :errors, :addresses, :duplicate_addresses
   
-  def to_json(*options)
+  def as_json(*options)
     {
       :users => addresses.map { |a| a.reject { |k, v| k == :shard } },
       :duplicates => duplicate_addresses,
       :errored_users => errors
-    }.to_json
+    }
   end
 
   def users
@@ -76,7 +76,8 @@ class UserList
     non_existing = @addresses.select { |a| !a[:user_id] }
     non_existing_users = non_existing.map do |a|
       user = User.new(:name => a[:name] || a[:address])
-      user.communication_channels.build(:path => a[:address], :path_type => 'email')
+      cc = user.communication_channels.build(:path => a[:address], :path_type => 'email')
+      cc.user = user
       user.workflow_state = 'creation_pending'
       user.initial_enrollment_type = User.initial_enrollment_type_from_text(@options[:initial_type])
       user.save!
@@ -145,14 +146,18 @@ class UserList
   
   def resolve
     all_account_ids = [@root_account.id] + @root_account.trusted_account_ids
+    associated_shards = @addresses.map {|x| Pseudonym.associated_shards(x[:address].downcase) }.flatten.to_set
     # Search for matching pseudonyms
     Shard.partition_by_shard(all_account_ids) do |account_ids|
-      Pseudonym.active.find(:all,
-        :select => 'unique_id AS address, users.name AS name, user_id, account_id',
-        :joins => :user,
-        :conditions => ["pseudonyms.workflow_state='active' AND LOWER(unique_id) IN (?) AND account_id IN (?)", @addresses.map {|x| x[:address].downcase}, account_ids]
-      ).map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |login|
-        addresses = @addresses.select { |a| a[:address].downcase == login[:address].downcase }
+      next if GlobalLookups.enabled? && !associated_shards.include?(Shard.current)
+      Pseudonym.active.
+          select('unique_id AS address, users.name AS name, user_id, account_id, sis_user_id').
+          joins(:user).
+          where("pseudonyms.workflow_state='active' AND (LOWER(unique_id) IN (?) OR sis_user_id IN (?)) AND account_id IN (?)", @addresses.map {|x| x[:address].downcase}, @addresses.map {|x| x[:address]}, account_ids).
+          map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |login|
+        addresses = @addresses.select { |a| a[:address].downcase == login[:address].downcase ||
+            a[:address] ==  login[:sis_user_id]}
+        login.delete(:sis_user_id)
         addresses.each do |address|
           # already found a matching pseudonym
           if address[:user_id]
@@ -181,12 +186,14 @@ class UserList
     # Search for matching emails (only if not open registration; otherwise there's no point - we just
     # create temporary users)
     emails = @addresses.select { |a| a[:type] == :email } if @search_method != :open
+    associated_shards = @addresses.map {|x| CommunicationChannel.associated_shards(x[:address].downcase) }.flatten.to_set
     Shard.partition_by_shard(all_account_ids) do |account_ids|
-      Pseudonym.active.find(:all,
-          :select => 'path AS address, users.name AS name, communication_channels.user_id AS user_id, communication_channels.workflow_state AS workflow_state',
-          :joins => { :user => :communication_channels },
-          :conditions => ["communication_channels.workflow_state<>'retired' AND LOWER(path) IN (?) AND account_id IN (?)", emails.map { |x| x[:address].downcase}, account_ids]
-      ).map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |login|
+      next if GlobalLookups.enabled? && !associated_shards.include?(Shard.current)
+      Pseudonym.active.
+          select('path AS address, users.name AS name, communication_channels.user_id AS user_id, communication_channels.workflow_state AS workflow_state').
+          joins(:user => :communication_channels).
+          where("communication_channels.workflow_state<>'retired' AND LOWER(path) IN (?) AND account_id IN (?)", emails.map { |x| x[:address].downcase}, account_ids).
+          map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |login|
         addresses = emails.select { |a| a[:address].downcase == login[:address].downcase }
         addresses.each do |address|
           # if all we've seen is unconfirmed, and this one is active, we'll allow this one to overrule
@@ -223,12 +230,13 @@ class UserList
     end
     sms_account_ids = @search_method != :closed ? [@root_account] : all_account_ids
     Shard.partition_by_shard(sms_account_ids) do |account_ids|
-      sms_scope = @search_method != :closed ? Pseudonym : Pseudonym.scoped(:conditions => {:account_id => account_ids})
-      sms_scope.active.find(:all,
-          :select => 'path AS address, users.name AS name, communication_channels.user_id AS user_id',
-          :joins => { :user => :communication_channels },
-          :conditions => "communication_channels.workflow_state='active' AND (#{smses.map{|x| "path LIKE '#{x[:address].gsub(/[^\d]/, '')}%'" }.join(" OR ")})"
-      ).map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |sms|
+      next if GlobalLookups.enabled? && !associated_shards.include?(Shard.current)
+      sms_scope = @search_method != :closed ? Pseudonym : Pseudonym.where(:account_id => account_ids)
+      sms_scope.active.
+          select('path AS address, users.name AS name, communication_channels.user_id AS user_id').
+          joins(:user => :communication_channels).
+          where("communication_channels.workflow_state='active' AND (#{smses.map{|x| "path LIKE '#{x[:address].gsub(/[^\d]/, '')}%'" }.join(" OR ")})").
+          map { |pseudonym| pseudonym.attributes.symbolize_keys }.each do |sms|
         address = sms.delete(:address)[/\d+/]
         addresses = smses.select { |a| a[:address].gsub(/[^\d]/, '') == address }
         addresses.each do |address|

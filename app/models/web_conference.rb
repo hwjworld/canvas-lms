@@ -28,7 +28,7 @@ class WebConference < ActiveRecord::Base
   has_many :attendees, :through => :web_conference_participants, :source => :user, :conditions => ['web_conference_participants.participation_type = ?', 'attendee']
   belongs_to :user
   validates_length_of :description, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
-  validates_presence_of :conference_type, :title
+  validates_presence_of :conference_type, :title, :context_id, :context_type, :user_id
   
   before_validation :infer_conference_details
 
@@ -37,9 +37,7 @@ class WebConference < ActiveRecord::Base
   
   has_a_broadcast_policy
   
-  named_scope :for_context_codes, lambda { |context_codes| { 
-    :conditions => {:context_code => context_codes} } 
-  }
+  scope :for_context_codes, lambda { |context_codes| where(:context_code => context_codes) }
 
   serialize :settings
   def settings
@@ -51,9 +49,9 @@ class WebConference < ActiveRecord::Base
   before_save :merge_user_settings
   def merge_user_settings
     unless user_settings.empty?
-      (type ? type.constantize : self).user_settings.each do |name, data|
-        next if data[:restricted_to] && !data[:restricted_to].call(self)
-        settings[name] = cast_setting(user_settings[name], data[:type])
+      (type ? type.constantize : self).user_setting_fields.each do |name, field_data|
+        next if field_data[:restricted_to] && !field_data[:restricted_to].call(self)
+        settings[name] = cast_setting(user_settings[name], field_data[:type])
       end
       @user_settings = nil
     end
@@ -65,18 +63,10 @@ class WebConference < ActiveRecord::Base
 
   def user_settings
     @user_settings ||= 
-      self.class.user_settings.keys.inject({}){ |hash, key|
+      self.class.user_setting_fields.keys.inject({}){ |hash, key|
         hash[key] = settings[key]
         hash
       }
-  end
-
-  def setting_name(key)
-    user_settings[key][:name].call
-  end
-
-  def setting_description(key)
-    user_settings[key][:description].call
   end
 
   def external_urls_name(key)
@@ -107,18 +97,31 @@ class WebConference < ActiveRecord::Base
 
   def default_settings
     @default_settings ||= 
-    self.class.user_settings.inject({}){ |hash, (name, data)|
+    self.class.user_setting_fields.inject({}){ |hash, (name, data)|
       hash[name] = data[:default] if data[:default]
       hash
     }
   end
 
-  def self.user_setting(name, options)
-    user_settings[name] = options
+  def self.user_setting_field(name, options)
+    user_setting_fields[name] = options
   end
 
-  def self.user_settings
-    read_inheritable_attribute(:user_settings) || write_inheritable_attribute(:user_settings, {})
+  if CANVAS_RAILS2
+    def self.user_setting_fields
+      read_inheritable_attribute(:user_setting_fields) || write_inheritable_attribute(:user_setting_fields, {})
+    end
+  else
+    class_attribute :user_setting_fields
+    self.user_setting_fields = {}
+  end
+
+  def self.user_setting_field_name(key)
+    user_setting_fields[key][:name].call
+  end
+
+  def self.user_setting_field_description(key)
+    user_setting_fields[key][:description].call
   end
 
   def external_urls
@@ -135,8 +138,13 @@ class WebConference < ActiveRecord::Base
     send("#{key}_external_url", user, url_id) || []
   end
 
-  def self.external_urls
-    read_inheritable_attribute(:external_urls) || write_inheritable_attribute(:external_urls, {})
+  if CANVAS_RAILS2
+    def self.external_urls
+      read_inheritable_attribute(:external_urls) || write_inheritable_attribute(:external_urls, {})
+    end
+  else
+    class_attribute :external_urls
+    self.external_urls = {}
   end
 
   def self.external_url(name, options)
@@ -240,6 +248,9 @@ class WebConference < ActiveRecord::Base
   def long_running?
     duration.nil?
   end
+  def long_running
+    long_running? ? 1 : 0
+  end
 
   DEFAULT_DURATION = 60
   def duration_in_seconds
@@ -252,10 +263,6 @@ class WebConference < ActiveRecord::Base
     else
       0
     end
-  end
-  
-  def conference_status
-    raise "not implemented"
   end
   
   def restart
@@ -294,6 +301,10 @@ class WebConference < ActiveRecord::Base
       close
     end
     @conference_active
+  rescue Errno::ECONNREFUSED => ex
+    # Account credentials changed, server unreachable/down, bad stuff happened.
+    @conference_active = false
+    @conference_active
   end
 
   def close
@@ -311,22 +322,21 @@ class WebConference < ActiveRecord::Base
     @attendee_key ||= self.conference_key
   end
   
-  def admin_join_url(user, return_to="http://www.instructure.com")
-    raise "not implemented"
-  end
-  
-  def participant_join_url(user, return_to="http://www.instructure.com")
-    raise "not implemented"
-  end
-  
+  # Default implementaiton since not every conference type requires initiation
   def initiate_conference
     true
   end
   
+  # Default implementation since most implementations don't support recording yet
+  def recordings
+    []
+  end
+
+
   def craft_url(user=nil,session=nil,return_to="http://www.instructure.com")
     user ||= self.user
     initiate_conference and touch or return nil
-    if (user == self.user || self.grants_right?(user,session,:initiate)) && !active?(true)
+    if user == self.user || self.grants_right?(user, session, :initiate)
       admin_join_url(user, return_to)
     else
       participant_join_url(user, return_to)
@@ -340,20 +350,8 @@ class WebConference < ActiveRecord::Base
     has_advanced_settings? ? 1 : 0
   end
 
-  def clone_for(context, dup=nil, options={})
-    dup ||= WebConference.new
-    self.attributes.delete_if{|k,v| [:id, :conference_key, :user_id, :added_user_id, :started_at, :uuid, :invited_user_ids].include?(k.to_sym) }.each do |key, val|
-      dup.send("#{key}=", val)
-    end
-    dup.context = context
-    context.log_merge_result("Web Conference \"#{dup.title}\" created")
-    dup
-  end
-  
-  named_scope :after, lambda{|date|
-    {:conditions => ['web_conferences.start_at IS NULL OR web_conferences.start_at > ?', date] }
-  }
-  
+  scope :after, lambda { |date| where("web_conferences.start_at IS NULL OR web_conferences.start_at>?", date) }
+
   set_policy do
     given { |user, session| self.users.include?(user) && self.cached_context_grants_right?(user, session, :read) }
     can :read and can :join
@@ -391,12 +389,17 @@ class WebConference < ActiveRecord::Base
       config[:class_name] == self.class.to_s
     end
   end
-  
-  named_scope :active, lambda {
-  }
+
+  scope :active, scoped
 
   def as_json(options={})
-    super(options.merge(:methods => [:has_advanced_settings]))
+    url = options.delete(:url)
+    join_url = options.delete(:join_url)
+    options.reverse_merge!(:only => %w(id title description conference_type duration started_at ended_at user_ids context_id context_type context_code))
+    result = super(options.merge(:include_root => false, :methods => [:has_advanced_settings, :long_running, :user_settings, :recordings]))
+    result['url'] = url
+    result['join_url'] = join_url
+    result
   end
 
   def self.plugins
@@ -411,7 +414,7 @@ class WebConference < ActiveRecord::Base
       plugin.settings.merge(
         :conference_type => plugin.id.classify,
         :class_name => (plugin.base || "#{plugin.id.classify}Conference"),
-        :user_settings => klass.user_settings,
+        :user_setting_fields => klass.user_setting_fields,
         :plugin => plugin
       ).with_indifferent_access
     }.compact

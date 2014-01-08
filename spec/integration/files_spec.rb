@@ -146,6 +146,50 @@ describe FilesController do
     # ensure that the user wasn't logged in by the normal means
     controller.instance_variable_get(:@current_user).should be_nil
   end
+  
+  it "should be able to use verifier in course context" do
+    course_with_teacher(:active_all => true, :user => user_with_pseudonym)
+    a1 = attachment_model(:uploaded_data => stub_png_data, :content_type => 'image/png', :context => @course)
+    HostUrl.stubs(:file_host_with_shard).returns(['files-test.host', Shard.default])
+    get "http://test.host/courses/#{@course.id}/files/#{a1.id}/download?verifier=#{a1.uuid}"
+    response.should be_redirect
+
+    uri = URI.parse response['Location']
+    qs = Rack::Utils.parse_nested_query(uri.query)
+    uri.host.should == 'files-test.host'
+    uri.path.should == "/courses/#{@course.id}/files/#{a1.id}/course%20files/test%20my%20file%3F%20hai!%26.png"
+    qs['verifier'].should == a1.uuid
+    location = response['Location']
+    reset!
+
+    get location
+    response.should be_success
+    response.content_type.should == 'image/png'
+    # ensure that the user wasn't logged in by the normal means
+    controller.instance_variable_get(:@current_user).should be_nil
+  end
+
+  it "should be able to directly download in course context preview links with verifier" do
+    course_with_teacher(:active_all => true, :user => user_with_pseudonym)
+    a1 = attachment_model(:uploaded_data => stub_png_data, :content_type => 'image/png', :context => @course)
+    HostUrl.stubs(:file_host_with_shard).returns(['files-test.host', Shard.default])
+    get "http://test.host/courses/#{@course.id}/files/#{a1.id}/preview?verifier=#{a1.uuid}"
+    response.should be_redirect
+
+    uri = URI.parse response['Location']
+    qs = Rack::Utils.parse_nested_query(uri.query)
+    uri.host.should == 'files-test.host'
+    uri.path.should == "/courses/#{@course.id}/files/#{a1.id}/course%20files/test%20my%20file%3F%20hai!%26.png"
+    qs['verifier'].should == a1.uuid
+    location = response['Location']
+    reset!
+
+    get location
+    response.should be_success
+    response.content_type.should == 'image/png'
+    # ensure that the user wasn't logged in by the normal means
+    controller.instance_variable_get(:@current_user).should be_nil
+  end
 
   it "should update module progressions for html safefiles iframe" do
     HostUrl.stubs(:file_host_with_shard).returns(['files-test.host', Shard.default])
@@ -180,7 +224,8 @@ describe FilesController do
     before do
       course_with_teacher(:active_all => true, :user => user_with_pseudonym)
       login_as
-      @aq = assessment_question_model
+      bank = @course.assessment_question_banks.create!
+      @aq = assessment_question_model(:bank => bank)
       @att = @aq.attachments.create!(:uploaded_data => stub_png_data)
     end
 
@@ -280,5 +325,47 @@ describe FilesController do
     response.should be_success
     
     @folder.file_attachments.by_position_then_display_name.should == [att2, att1]
+  end
+
+  context "scribd_render" do
+    before do
+      course_with_student_logged_in :active_all => true
+      scribdable_attachment_model :context => @course, :workflow_state => 'processed'
+    end
+
+    it "should require read permissions on the file" do
+      user
+      user_session @user
+      post "/courses/#{@course.id}/files/#{@attachment.id}/scribd_render"
+      assert_unauthorized
+    end
+
+    it "should kick off a scribd render job" do
+      expect {
+        post "/courses/#{@course.id}/files/#{@attachment.id}/scribd_render"
+        response.should be_success
+      }.to change(Delayed::Job, :count).by(1)
+      Delayed::Job.find_by_tag('Attachment#submit_to_scribd!').should_not be_nil
+    end
+
+    it "should work on assignment context" do
+      @assignment = assignment_model(:course => @course)
+      @attachment = scribdable_attachment_model :context => @assignment, :workflow_state => 'processed'
+      post "/assignments/#{@assignment.id}/files/#{@attachment.id}/scribd_render"
+      response.should be_success
+      Delayed::Job.find_by_tag('Attachment#submit_to_scribd!').should_not be_nil
+    end
+
+    it "should allow a teacher to render a student's submission" do
+      @assignment = @course.assignments.create!(:title => 'upload_assignment', :submission_types => 'online_upload')
+      scribdable_attachment_model :context => @student, :workflow_state => 'processed'
+      @assignment.submit_homework @student, :attachments => [@attachment]
+
+      teacher_in_course :active_all => true
+      user_session @teacher
+      post "/users/#{@student.id}/files/#{@attachment.id}/scribd_render"
+      response.should be_success
+      Delayed::Job.find_by_tag('Attachment#submit_to_scribd!').should_not be_nil
+    end
   end
 end

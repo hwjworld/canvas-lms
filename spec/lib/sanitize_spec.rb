@@ -74,6 +74,13 @@ describe Sanitize do
     res.should match(/width/)
   end
   
+  it "should allow negative values" do
+    str = "<div style='margin: -18px;height: 10px;'></div>"
+    res = Sanitize.clean(str, Instructure::SanitizeField::SANITIZE)
+    res.should match(/margin/)
+    res.should match(/height/)
+  end
+
   it "should remove non-whitelisted css attributes" do
     str = "<div style='bacon: 5px; border-left-color: #fff;'></div>"
     res = Sanitize.clean(str, Instructure::SanitizeField::SANITIZE)
@@ -86,8 +93,20 @@ describe Sanitize do
     res = Sanitize.clean(str, Instructure::SanitizeField::SANITIZE)
     res.should == str
   end
+  
+  it "should allow font tags with valid attributes" do
+    str = %{<font face="Comic Sans MS" color="blue" size="3" bacon="yes">hello</font>}
+    res = Sanitize.clean(str, Instructure::SanitizeField::SANITIZE)
+    res.should == %{<font face="Comic Sans MS" color="blue" size="3">hello</font>}
+  end
 
-  Dir.glob(File.join(RAILS_ROOT, 'spec', 'fixtures', 'xss', '*.xss')) do |filename|
+  it "should remove and not escape contents of style tags" do
+    str = %{<p><style type="text/css">pleaseignoreme: blahblahblah</style>but not me</p>}
+    res = Sanitize.clean(str, Instructure::SanitizeField::SANITIZE)
+    res.should == "<p>but not me</p>"
+  end
+
+  Dir.glob(Rails.root.join('spec', 'fixtures', 'xss', '*.xss')) do |filename|
     name = File.split(filename).last
     it "should sanitize xss attempts for #{name}" do
       f = File.open(filename)

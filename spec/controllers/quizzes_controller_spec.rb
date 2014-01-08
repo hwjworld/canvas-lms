@@ -34,6 +34,37 @@ describe QuizzesController do
     @quiz.quiz_groups.create
   end
 
+
+  def temporary_user_code(generate=true)
+    if generate
+      session[:temporary_user_code] ||= "tmp_#{Digest::MD5.hexdigest("#{Time.now.to_i.to_s}_#{rand.to_s}")}"
+    else
+      session[:temporary_user_code]
+    end
+  end
+
+  def logged_out_survey_with_submission(user, questions, &block)
+    course_with_teacher_logged_in(:active_all => true)
+
+    @assignment = @course.assignments.create(:title => "Test Assignment")
+    @assignment.workflow_state = "available"
+    @assignment.submission_types = "online_quiz"
+    @assignment.save
+    @quiz = Quiz.find_by_assignment_id(@assignment.id)
+    @quiz.anonymous_submissions = false
+    @quiz.quiz_type = "survey"
+
+    @questions = questions.map { |q| @quiz.quiz_questions.create!(q) }
+    @quiz.generate_quiz_data
+    @quiz.save!
+
+    @quiz_submission = @quiz.generate_submission(user)
+    @quiz_submission.mark_completed
+    @quiz_submission.submission_data = yield if block_given?
+    @quiz_submission.grade_submission
+    @quiz_submission.save!
+  end
+
   describe "GET 'index'" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
@@ -59,12 +90,100 @@ describe QuizzesController do
 
     it "should retrieve quizzes" do
       course_with_teacher_logged_in(:active_all => true)
-      course_quiz(:active => true)
+      course_quiz(!!:active)
 
       get 'index', :course_id => @course.id
       assigns[:quizzes].should_not be_nil
       assigns[:quizzes].should_not be_empty
       assigns[:quizzes][0].should eql(@quiz)
+    end
+  end
+
+  describe "GET 'index' with draft state enabled" do
+    setup do
+      Account.default.enable_feature! :draft_state
+    end
+
+    it "should assign variables" do
+      course_with_teacher_logged_in(:active_all => true)
+      get 'index', :course_id => @course.id
+      assigns[:assignment_json].should_not be_nil
+      assigns[:open_json].should_not be_nil
+      assigns[:surveys_json].should_not be_nil
+      assigns[:quiz_options].should_not be_nil
+    end
+
+    it "should filter out unpublished quizzes for student" do
+      course_with_student_logged_in(:active_all => true)
+      course_quiz
+      course_quiz(active = true)
+
+      get 'index', :course_id => @course.id
+
+      assigns[:quizzes].length.should eql 1
+      assigns[:quizzes].map do |quiz|
+        quiz.published?.should be_true
+      end
+    end
+  end
+
+  describe "GET 'index' without fabulous quizzes enabled" do
+    before :each do
+      a = Account.default
+      a.disable_fabulous_quizzes!
+      a.save!
+    end
+
+    after :each do
+      a = Account.default
+      a.enable_fabulous_quizzes!
+      a.save!
+    end
+
+    it "should not redirect" do
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz(active = true)
+      a = Account.default
+      a.enable_fabulous_quizzes?.should eql false
+      get 'index', :course_id => @course.id
+      assert_response(:success)
+    end
+  end
+
+  describe "GET 'index' with fabulous quizzes enabled" do
+    before :each do
+      a = Account.default
+      a.enable_fabulous_quizzes!
+      a.save!
+    end
+
+    after :each do
+      a = Account.default
+      a.disable_fabulous_quizzes!
+      a.save!
+    end
+
+    it "should redirect to fabulous quizzes app" do
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz(active = true)
+      a = Account.default
+      a.enable_fabulous_quizzes?.should eql true
+      get 'index', :course_id => @course.id
+      assert_redirected_to(:controller => "quizzes", :action => "fabulous_quizzes")
+    end
+  end
+
+  describe "GET 'fabulous_quizzes' without fabulous quizzes enabled" do
+    it "should redirect to index" do
+      a = Account.default
+      a.disable_fabulous_quizzes!
+      a.save!
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz(active = true)
+      a = Account.default
+      a.enable_fabulous_quizzes?.should eql false
+      get 'fabulous_quizzes', :course_id => @course.id
+      assert_redirected_to(:controller => "quizzes", :action => "index")
     end
   end
 
@@ -111,9 +230,13 @@ describe QuizzesController do
     it "should assign variables" do
       course_with_teacher_logged_in(:active_all => true)
       course_quiz
+      regrade = @quiz.quiz_regrades.create!(:user_id => @teacher.id, quiz_version: @quiz.version_number)
+      q = @quiz.quiz_questions.create!
+      regrade.quiz_question_regrades.create!(:quiz_question_id => q.id,:regrade_option => 'no_regrade')
       get 'edit', :course_id => @course.id, :id => @quiz.id
       assigns[:quiz].should_not be_nil
       assigns[:quiz].should eql(@quiz)
+      assigns[:js_env][:REGRADE_OPTIONS].should == {q.id => 'no_regrade' }
       response.should render_template("new")
     end
   end
@@ -166,6 +289,78 @@ describe QuizzesController do
       assigns[:submitted_student_count].should == 1
       assigns[:any_submissions_pending_review].should == false
     end
+
+    it "should allow forcing authentication on public quiz pages" do
+      course_with_student :active_all => 1
+      @course.update_attribute :is_public, true
+      course_quiz !!:active
+      get 'show', :course_id => @course.id, :id => @quiz.id, :force_user => 1
+      response.should be_redirect
+      response.location.should match /login/
+    end
+
+    it "should set session[headless_quiz] if persist_headless param is sent" do
+      course_with_student_logged_in :active_all => 1
+      course_quiz !!:active
+      get 'show', :course_id => @course.id, :id => @quiz.id, :persist_headless => 1
+      controller.session[:headless_quiz].should be_true
+      assigns[:headers].should be_false
+    end
+
+    it "should not render headers if session[:headless_quiz] is set" do
+      course_with_student_logged_in :active_all => 1
+      course_quiz !!:active
+      controller.session[:headless_quiz] = true
+      get 'show', :course_id => @course.id, :id => @quiz.id
+      assigns[:headers].should be_false
+    end
+
+    it "assigns js_env for attachments if submission is present" do
+      require 'action_controller_test_process'
+      course_with_student_logged_in :active_all => true
+      course_quiz !!:active
+      submission = @quiz.generate_submission @user
+      create_attachment_for_file_upload_submission!(submission)
+      get 'show', :course_id => @course.id, :id => @quiz.id
+      attachment = submission.attachments.first
+      assigns[:js_env][:ATTACHMENTS].should == {
+        attachment.id => {:id => attachment.id,
+                          :display_name => attachment.display_name }
+      }
+    end
+
+    it "assigns js_env for versions if submission is present" do
+      require 'action_controller_test_process'
+      course_with_student_logged_in :active_all => true
+      course_quiz !!:active
+      submission = @quiz.generate_submission @user
+      create_attachment_for_file_upload_submission!(submission)
+      get 'show', :course_id => @course.id, :id => @quiz.id
+
+      path = "courses/#{@course.id}/quizzes/#{@quiz.id}/submission_versions"
+      assigns[:js_env][:SUBMISSION_VERSIONS_URL].should include(path)
+    end
+
+    it "doesn't show unpublished quizzes to students with draft state" do
+      course_with_student_logged_in(active_all: true)
+      course_quiz(active=true)
+      Account.default.enable_feature!(:draft_state)
+      @quiz.unpublish!
+      get 'show', course_id: @course.id, id: @quiz.id
+      response.should_not be_success
+    end
+
+    it 'logs a single asset access entry with an action level of "view"' do
+      Setting.set('enable_page_views', 'db')
+
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz
+      get 'show', :course_id => @course.id, :id => @quiz.id
+      assigns[:access].should_not be_nil
+      assigns[:accessed_asset].should_not be_nil
+      assigns[:accessed_asset][:level].should == 'view'
+      assigns[:access].view_score.should == 1
+    end
   end
 
   describe "GET 'managed_quiz_data'" do
@@ -181,15 +376,65 @@ describe QuizzesController do
       course_quiz
       @sub1 = @quiz.generate_submission(@user1)
       @sub2 = @quiz.generate_submission(@user2)
-
       user_session @teacher
       get 'managed_quiz_data', :course_id => @course.id, :quiz_id => @quiz.id
-      assigns[:submissions].sort_by(&:id).should ==[@sub1, @sub2].sort_by(&:id)
+      assigns[:submissions_from_users][@sub1.user_id].should == @sub1
+      assigns[:submissions_from_users][@sub2.user_id].should == @sub2
       assigns[:submitted_students].sort_by(&:id).should == [@user1, @user2].sort_by(&:id)
 
       user_session @ta1
       get 'managed_quiz_data', :course_id => @course.id, :quiz_id => @quiz.id
-      assigns[:submissions].should ==[@sub1]
+      assigns[:submissions_from_users][@sub1.user_id].should == @sub1
+      assigns[:submitted_students].should == [@user1]
+    end
+
+    it "should include survey results from logged out users in a public course" do
+      #logged out user
+      user = temporary_user_code
+
+      #make questions
+      questions = [{:question_data => { :name => "test 1" }},
+        {:question_data => { :name => "test 2" }},
+        {:question_data => { :name => "test 3" }},
+        {:question_data => { :name => "test 4" }}]
+
+      logged_out_survey_with_submission user, questions
+
+      get 'managed_quiz_data', :course_id => @course.id, :quiz_id => @quiz.id
+
+      assigns[:submissions_from_logged_out].should == [@quiz_submission]
+      assigns[:submissions_from_users].should == {}
+    end
+
+    it "should include survey results from a logged-in user in a public course" do
+      course_with_teacher_logged_in(:active_all => true)
+
+      @user1 = user_with_pseudonym(:active_all => true, :name => 'Student1', :username => 'student1@instructure.com')
+      @course.enroll_student(@user1)
+
+      questions = [{:question_data => { :name => "test 1" }},
+        {:question_data => { :name => "test 2" }},
+        {:question_data => { :name => "test 3" }},
+        {:question_data => { :name => "test 4" }}]
+
+      @assignment = @course.assignments.create(:title => "Test Assignment")
+      @assignment.workflow_state = "available"
+      @assignment.submission_types = "online_quiz"
+      @assignment.save
+      @quiz = Quiz.find_by_assignment_id(@assignment.id)
+      @quiz.anonymous_submissions = true
+      @quiz.quiz_type = "survey"
+
+      @questions = questions.map { |q| @quiz.quiz_questions.create!(q) }
+      @quiz.generate_quiz_data
+      @quiz.save!
+
+      @quiz_submission = @quiz.generate_submission(@user1)
+      @quiz_submission.mark_completed
+
+      get 'managed_quiz_data', :course_id => @course.id, :quiz_id => @quiz.id
+
+      assigns[:submissions_from_users][@quiz_submission.user_id].should == @quiz_submission
       assigns[:submitted_students].should == [@user1]
     end
   end
@@ -238,64 +483,6 @@ describe QuizzesController do
     end
   end
 
-  describe "POST 'reorder'" do
-    it "should require authorization" do
-      course_with_teacher(:active_all => true)
-      course_quiz
-      post 'reorder', :course_id => @course.id, :quiz_id => @quiz.id, :order => ""
-      assert_unauthorized
-    end
-
-    it "should require authorization" do
-      course_with_student_logged_in(:active_all => true)
-      course_quiz
-      post 'reorder', :course_id => @course.id, :quiz_id => @quiz.id, :order => ""
-      assert_unauthorized
-    end
-
-    it "should reorder questions" do
-      course_with_teacher_logged_in(:active_all => true)
-      course_quiz
-      q1 = quiz_question
-      q2 = quiz_question
-      q3 = quiz_question
-      q1.position.should eql(1)
-      q2.position.should eql(2)
-      q3.position.should eql(3)
-      post 'reorder', :course_id => @course.id, :quiz_id => @quiz.id, :order => "question_#{q3.id},question_#{q1.id},question_#{q2.id}"
-      assigns[:quiz].should eql(@quiz)
-      q1.reload
-      q2.reload
-      q3.reload
-      q1.position.should eql(2)
-      q2.position.should eql(3)
-      q3.position.should eql(1)
-      response.should be_success
-    end
-
-    it "should reorder questions AND groups" do
-      course_with_teacher_logged_in(:active_all => true)
-      course_quiz
-      q1 = quiz_question
-      q1.save!
-      q2 = quiz_question
-      g3 = quiz_group
-      q1.position.should eql(1)
-      q2.position.should eql(2)
-      g3.position.should eql(3)
-      post 'reorder', :course_id => @course.id, :quiz_id => @quiz.id, :order => "group_#{g3.id},question_#{q1.id},question_#{q2.id}"
-      assigns[:quiz].should eql(@quiz)
-      q1.reload
-      q2.reload
-      g3.reload
-      q1.position.should eql(2)
-      q1.quiz_group_id.should be_nil
-      q2.position.should eql(3)
-      g3.position.should eql(1)
-      response.should be_success
-    end
-  end
-
   describe "POST 'take'" do
     it "should require authorization" do
       course_with_student(:active_all => true)
@@ -309,6 +496,40 @@ describe QuizzesController do
       course_quiz(true)
       post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
       response.should redirect_to("/courses/#{@course.id}/quizzes/#{@quiz.id}/take")
+    end
+
+    context 'asset access logging' do
+      before :each do
+        Setting.set('enable_page_views', 'db')
+
+        course_with_teacher_logged_in(:active_all => true)
+        course_quiz
+      end
+
+      it 'should log a single entry with an action level of "participate"' do
+        post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
+        assigns[:access].should_not be_nil
+        assigns[:accessed_asset].should_not be_nil
+        assigns[:accessed_asset][:level].should == 'participate'
+        assigns[:access].participate_score.should == 1
+      end
+
+      it 'should not log entries when resuming the quiz' do
+        post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
+        assigns[:access].should_not be_nil
+        assigns[:accessed_asset].should_not be_nil
+        assigns[:accessed_asset][:level].should == 'participate'
+        assigns[:access].participate_score.should == 1
+
+        # Since the second request we will make is handled by the same controller
+        # instance, @accessed_asset must be reset otherwise
+        # ApplicationController#log_page_view will use it to log another entry.
+        controller.instance_variable_set('@accessed_asset', nil)
+        controller.js_env.clear
+
+        post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
+        assigns[:access].participate_score.should == 1
+      end
     end
 
     context 'verification' do
@@ -424,12 +645,21 @@ describe QuizzesController do
       response.should render_template('invalid_ip')
     end
 
-    it" should let the user take the quiz if the ip_filter matches" do
+    it "should let the user take the quiz if the ip_filter matches" do
       course_with_student_logged_in(:active_all => true)
       course_quiz(true)
       @quiz.ip_filter = '123.123.123.123'
       @quiz.save!
       request.env['REMOTE_ADDR'] = '123.123.123.123'
+      post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
+      response.should redirect_to("/courses/#{@course.id}/quizzes/#{@quiz.id}/take")
+    end
+
+    it "should work without a user for non-graded quizzes in public courses" do
+      course_with_student :active_all => true
+      @course.update_attribute :is_public, true
+      course_quiz :active
+      @quiz.update_attribute :quiz_type, 'practice_quiz'
       post 'show', :course_id => @course, :quiz_id => @quiz.id, :take => '1'
       response.should redirect_to("/courses/#{@course.id}/quizzes/#{@quiz.id}/take")
     end
@@ -478,7 +708,7 @@ describe QuizzesController do
         course_quiz(true)
         @quiz.generate_submission(@user)
       end
-      
+
       context "a valid question" do
         it "renders take_quiz" do
           QuizzesController.any_instance.stubs(:valid_question?).returns(true)
@@ -601,7 +831,7 @@ describe QuizzesController do
       @quiz.workflow_state = 'available'
       @quiz.published_at = Time.now
       @quiz.save
-      
+
       @quiz.assignment.should_not be_nil
       @quiz.assignment.mute!
       s = @quiz.generate_submission(u)
@@ -699,6 +929,22 @@ describe QuizzesController do
       assigns[:quiz].should_not be_nil
       assigns[:quiz].should eql(@quiz)
       assigns[:quiz].title.should eql("some quiz")
+    end
+
+    it "should be able to change ungraded survey to quiz without error" do
+      # aka should handle the case where the quiz's assignment is nil/not present.
+      course_with_teacher_logged_in(active_all: true)
+      course_quiz
+      @quiz.update_attributes(quiz_type: 'ungraded_survey')
+      # make sure the assignment doesn't exist
+      @quiz.assignment = nil if @quiz.context.feature_enabled?(:draft_state)
+      @quiz.assignment.should_not be_present
+      post 'update', course_id: @course.id, id: @quiz.id, activate: true,
+        quiz: {quiz_type: 'assignment'}
+      response.should be_redirect
+      @quiz.reload.quiz_type.should == 'assignment'
+      @quiz.should be_available
+      @quiz.assignment.should be_present
     end
 
     it "should lock and unlock without removing assignment" do
@@ -825,7 +1071,7 @@ describe QuizzesController do
         @student.messages.detect{|m| m.notification_id == @notification.id}.should_not be_nil
       end
 
-      it "should not send due date changed if notify_of_update is not set" do
+      it "should send due date changed if notify_of_update is not set" do
         course_due_date = 2.days.from_now
         section_due_date = 3.days.from_now
         post 'update', :course_id => @course.id,
@@ -840,7 +1086,7 @@ describe QuizzesController do
             }]
           }
 
-        @student.messages.detect{|m| m.notification_id == @notification.id}.should be_nil
+        @student.messages.detect{ |m| m.notification_id == @notification.id }.should_not be_nil
       end
     end
   end
@@ -849,24 +1095,55 @@ describe QuizzesController do
     it "should allow concluded teachers to see a quiz's statistics" do
       course_with_teacher_logged_in(:active_all => true)
       course_quiz
-      get 'statistics', :course_id => @course.id, :quiz_id => @quiz.id
-      response.should be_success
-      response.should render_template('statistics')
-
       @enrollment.conclude
       get 'statistics', :course_id => @course.id, :quiz_id => @quiz.id
       response.should be_success
       response.should render_template('statistics')
     end
 
-    it "should redirect to the quiz show page if the course is a MOOC" do
+    context "logged out submissions" do
+      integrate_views
+
+      it "should include logged_out users' submissions in a public course" do
+        #logged_out user
+        user = temporary_user_code
+
+        #make questions
+        questions = [{:question_data => { :name => "test 1" }},
+          {:question_data => { :name => "test 2" }},
+          {:question_data => { :name => "test 3" }},
+          {:question_data => { :name => "test 4" }}]
+
+        logged_out_survey_with_submission user, questions
+
+        #non logged_out submissions
+        @user1 = user_with_pseudonym(:active_all => true, :name => 'Student1', :username => 'student1@instructure.com')
+        @quiz_submission1 = @quiz.generate_submission(@user1)
+        @quiz_submission1.grade_submission
+
+        @user2 = user_with_pseudonym(:active_all => true, :name => 'Student2', :username => 'student2@instructure.com')
+        @quiz_submission2 = @quiz.generate_submission(@user2)
+        @quiz_submission2.grade_submission
+
+        @course.large_roster = false
+        @course.save!
+
+
+        get 'statistics', :course_id => @course.id, :quiz_id => @quiz.id, :all_versions => '1'
+        response.should be_success
+        response.body.should match /Logged Out User/
+        response.should render_template('statistics')
+      end
+    end
+
+    it "should show the statistics page if the course is a MOOC" do
       course_with_teacher_logged_in(:active_all => true)
       @course.large_roster = true
       @course.save!
       course_quiz
       get 'statistics', :course_id => @course.id, :quiz_id => @quiz.id
-      flash[:notice].should == "That page has been disabled for this course"
-      response.should redirect_to course_quiz_url(@course.id, @quiz.id)
+      response.should be_success
+      response.should render_template('statistics')
     end
   end
 
@@ -918,6 +1195,87 @@ describe QuizzesController do
       assigns[:quiz].should_not be_nil
       assigns[:quiz].should eql(@quiz)
       assigns[:quiz].should be_deleted
+    end
+  end
+
+  describe "POST 'publish'" do
+    it "should require authorization" do
+      course_with_teacher(:active_all => true)
+      course_quiz
+      post 'publish', :course_id => @course.id, :quizzes => [@quiz.id]
+      assert_unauthorized
+    end
+
+    it "should publish unpublished quizzes" do
+      course_with_teacher_logged_in(:active_all => true)
+      @quiz = @course.quizzes.build(:title => "New quiz!")
+      @quiz.save!
+
+      @quiz.published?.should be_false
+      post 'publish', :course_id => @course.id, :quizzes => [@quiz.id]
+
+      @quiz.reload.published?.should be_true
+    end
+  end
+
+  describe "POST 'unpublish'" do
+    it "should require authorization" do
+      course_with_teacher(:active_all => true)
+      course_quiz
+      post 'unpublish', :course_id => @course.id, :quizzes => [@quiz.id]
+      assert_unauthorized
+    end
+
+    it "should unpublish published quizzes" do
+      course_with_teacher_logged_in(:active_all => true)
+      @quiz = @course.quizzes.build(:title => "New quiz!")
+      @quiz.publish!
+
+      @quiz.published?.should be_true
+      post 'unpublish', :course_id => @course.id, :quizzes => [@quiz.id]
+
+      @quiz.reload.published?.should be_false
+    end
+  end
+
+  describe "GET submission_versions" do
+    it "requires authorization" do
+      course_with_teacher(:active_all => true)
+      course_quiz
+      get 'submission_versions', :course_id => @course.id, :quiz_id => @quiz.id
+      assert_unauthorized
+      assigns[:quiz].should_not be_nil
+      assigns[:quiz].should eql(@quiz)
+    end
+
+    it "assigns variables" do
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz
+      submission = @quiz.generate_submission @user
+      create_attachment_for_file_upload_submission!(submission)
+      get 'submission_versions', :course_id => @course.id, :quiz_id => @quiz.id
+      assigns[:quiz].should_not be_nil
+      assigns[:quiz].should eql(@quiz)
+      assigns[:submission].should_not be_nil
+      assigns[:versions].should_not be_nil
+    end
+
+    it "should render nothing if quiz is muted" do
+      course_with_teacher_logged_in(:active_all => true)
+      course_quiz
+
+      submission = @quiz.generate_submission @user
+
+      assignment = @course.assignments.create(:title => "Test Assignment")
+      assignment.workflow_state = "available"
+      assignment.submission_types = "online_quiz"
+      assignment.muted = true
+      assignment.save!
+      @quiz.assignment = assignment
+
+      get 'submission_versions', :course_id => @course.id, :quiz_id => @quiz.id
+      response.should be_success
+      response.body.should match(/^\s?$/)
     end
   end
 end

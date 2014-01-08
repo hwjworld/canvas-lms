@@ -17,6 +17,7 @@
 #
 
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
+require File.expand_path(File.dirname(__FILE__) + '/helpers/api_specs')
 
 class HashWithDupCheck < Hash
   def []=(k,v)
@@ -46,9 +47,15 @@ def api_call(method, path, params, body_params = {}, headers = {}, opts = {})
     Api.parse_pagination_links(response.headers['Link'])
   end
 
+  if jsonapi_call?(headers) && method == :delete
+    response.status.should == '204 No Content'
+    return
+  end
+
   case params[:format]
   when 'json'
     response.header['content-type'].should == 'application/json; charset=utf-8'
+
     body = response.body
     if body.respond_to?(:call)
       StringIO.new.tap { |sio| body.call(nil, sio); body = sio.string }
@@ -65,11 +72,18 @@ def api_call(method, path, params, body_params = {}, headers = {}, opts = {})
   end
 end
 
+def jsonapi_call?(headers)
+  headers['Accept'] == 'application/vnd.api+json'
+end
+
 # like api_call, but performed by the specified user instead of @user
 def api_call_as_user(user, method, path, params, body_params = {}, headers = {}, opts = {})
   token = access_token_for_user(user)
   headers['Authorization'] = "Bearer #{token}"
-  user.pseudonyms.create!(:unique_id => "#{user.id}@example.com", :account => opts[:domain_root_account]) unless user.pseudonym(true)
+  account = opts[:domain_root_account] || Account.default
+  user.pseudonyms.reload
+  account.pseudonyms.create!(:unique_id => "#{user.id}@example.com", :user => user) unless user.find_pseudonym_for_account(account, true)
+  Pseudonym.any_instance.stubs(:works_for_account?).returns(true)
   api_call(method, path, params, body_params, headers, opts)
 end
 
@@ -92,13 +106,24 @@ def raw_api_call(method, path, params, body_params = {}, headers = {}, opts = {}
     if !params.key?(:api_key) && !params.key?(:access_token) && !headers.key?('Authorization') && @user
       token = access_token_for_user(@user)
       headers['Authorization'] = "Bearer #{token}"
-      @user.pseudonyms.create!(:unique_id => "#{@user.id}@example.com", :account => opts[:domain_root_account]) unless @user.pseudonym(true)
+      account = opts[:domain_root_account] || Account.default
+      Pseudonym.any_instance.stubs(:works_for_account?).returns(true)
+      account.pseudonyms.create!(:unique_id => "#{@user.id}@example.com", :user => @user) unless @user.all_active_pseudonyms(:reload) && @user.find_pseudonym_for_account(account, true)
     end
 
     LoadAccount.stubs(:default_domain_root_account).returns(opts[:domain_root_account]) if opts.has_key?(:domain_root_account)
 
     __send__(method, path, params.reject { |k,v| %w(controller action).include?(k.to_s) }.merge(body_params), headers)
   end
+end
+
+def follow_pagination_link(rel, params={})
+  links = Api.parse_pagination_links(response.headers['Link'])
+  link = links.find{ |l| l[:rel] == rel }
+  link.delete(:rel)
+  uri = link.delete(:uri).to_s
+  link.each{ |key,value| params[key.to_sym] = value }
+  api_call(:get, uri, params)
 end
 
 def params_from_with_nesting(method, path)
@@ -118,16 +143,20 @@ def should_translate_user_content(course)
   content = %{
     <p>
       Hello, students.<br>
-      This will explain everything: <img src="/courses/#{course.id}/files/#{attachment.id}/preview" alt="important">
+      This will explain everything: <img id="1" src="/courses/#{course.id}/files/#{attachment.id}/preview" alt="important">
+      This won't explain anything:  <img id="2" src="/courses/#{course.id}/files/#{attachment.id}/download" alt="important">
       Also, watch this awesome video: <a href="/media_objects/qwerty" class="instructure_inline_media_comment video_comment" id="media_comment_qwerty"><img></a>
       And refer to this <a href="/courses/#{course.id}/wiki/awesome-page">awesome wiki page</a>.
     </p>
   }
   html = yield content
   doc = Nokogiri::HTML::DocumentFragment.parse(html)
-  img = doc.at_css('img')
-  img.should be_present
-  img['src'].should == "http://www.example.com/files/#{attachment.id}/download?verifier=#{attachment.uuid}"
+  img1 = doc.at_css('img#1')
+  img1.should be_present
+  img1['src'].should == "http://www.example.com/courses/#{course.id}/files/#{attachment.id}/preview?verifier=#{attachment.uuid}"
+  img2 = doc.at_css('img#2')
+  img2.should be_present
+  img2['src'].should == "http://www.example.com/courses/#{course.id}/files/#{attachment.id}/download?verifier=#{attachment.uuid}"
   video = doc.at_css('video')
   video.should be_present
   video['poster'].should match(%r{http://www.example.com/media_objects/qwerty/thumbnail})
@@ -135,4 +164,18 @@ def should_translate_user_content(course)
   video['src'].should match(%r{entryId=qwerty})
   doc.css('a').last['data-api-endpoint'].should match(%r{http://www.example.com/api/v1/courses/#{course.id}/pages/awesome-page})
   doc.css('a').last['data-api-returntype'].should == 'Page'
+end
+
+def should_process_incoming_user_content(context)
+  attachment_model(:context => context)
+  incoming_content = "<p>content blahblahblah <a href=\"/files/#{@attachment.id}/download?a=1&amp;verifier=2&amp;b=3\">haha</a></p>"
+
+  saved_content = yield incoming_content
+  saved_content.should == "<p>content blahblahblah <a href=\"/#{context.class.to_s.underscore.pluralize}/#{context.id}/files/#{@attachment.id}/download?a=1&amp;b=3\">haha</a></p>"
+end
+
+def verify_json_error(error, field, code, message = nil)
+  error["field"].should == field
+  error["code"].should == code
+  error["message"].should == message if message
 end

@@ -15,46 +15,71 @@
 # You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
-
 require [
-  'jquery'
-  'underscore'
-  'compiled/collections/UserCollection'
+  'Backbone'
+  'compiled/models/CreateUserList'
+  'compiled/models/Role'
+  'compiled/views/courses/roster/CreateUsersView'
+  'compiled/views/courses/roster/RoleSelectView'
+  'jst/courses/roster/rosterUsers'
+  'compiled/collections/RosterUserCollection'
+  'compiled/collections/RolesCollection'
   'compiled/collections/SectionCollection'
-  'compiled/views/courses/RosterView'
-  'jst/courses/Roster'
-], ($, _, UserCollection, SectionCollection, RosterView, roster) ->
+  'compiled/views/InputFilterView'
+  'compiled/views/PaginatedCollectionView'
+  'compiled/views/courses/roster/RosterUserView'
+  'compiled/views/courses/roster/RosterView'
+  'compiled/views/courses/roster/ResendInvitationsView'
+  'jquery'
+], ({Model}, CreateUserList, Role, CreateUsersView, RoleSelectView, rosterUsersTemplate, RosterUserCollection, RolesCollection, SectionCollection, InputFilterView, PaginatedCollectionView, RosterUserView, RosterView, ResendInvitationsView, $) ->
 
-  # Load environment
-  course       = ENV.context_asset_string.split('_')[1]
-  url          = "/api/v1/courses/#{course}/users"
   fetchOptions =
-    include: ['avatar_url', 'enrollments', 'email']
+    include: ['avatar_url', 'enrollments', 'email', 'observed_users']
     per_page: 50
+  users = new RosterUserCollection null,
+    course_id: ENV.context_asset_string.split('_')[1]
+    sections: new SectionCollection ENV.SECTIONS
+    params: fetchOptions
+  rolesCollection = new RolesCollection(new Role attributes for attributes in ENV.ALL_ROLES)
+  course = new Model(ENV.course)
+  inputFilterView = new InputFilterView
+    collection: users
+  usersView = new PaginatedCollectionView
+    collection: users
+    itemView: RosterUserView
+    itemViewOptions:
+      course: ENV.course
+    canViewLoginIdColumn: ENV.permissions.manage_admin_users or ENV.permissions.manage_students
+    buffer: 1000
+    template: rosterUsersTemplate
+  roleSelectView = new RoleSelectView
+    collection: users
+    rolesCollection: rolesCollection
+  createUsersView = new CreateUsersView
+    collection: users
+    rolesCollection: rolesCollection
+    model: new CreateUserList
+      sections: ENV.SECTIONS
+      roles: ENV.ALL_ROLES
+      readURL: ENV.USER_LISTS_URL
+      updateURL: ENV.ENROLL_USERS_URL
+    courseModel: course
+  resendInvitationsView = new ResendInvitationsView
+    model: course
+    resendInvitationsUrl: ENV.resend_invitations_url
+    canResend: ENV.permissions.manage_students or ENV.permissions.manage_admin_users
+  @app = new RosterView
+    usersView: usersView
+    inputFilterView: inputFilterView
+    roleSelectView: roleSelectView
+    createUsersView: createUsersView
+    resendInvitationsView: resendInvitationsView
+    collection: users
+    roles: ENV.ALL_ROLES
+    permissions: ENV.permissions
+    course: ENV.course
 
-  sections     = new SectionCollection(ENV.SECTIONS)
-  columns =
-    students: $('.roster .student_roster')
-    teachers: $('.roster .teacher_roster')
+  @app.render()
+  @app.$el.appendTo $('#content')
+  users.fetch()
 
-  for roster_data in ENV.COURSE_ROSTERS
-    users = new UserCollection
-    users.url = url
-    users.sections = sections
-    users.roles = roster_data['roles']
-
-    usersOptions = add: false, data: _.extend({}, fetchOptions, enrollment_role: roster_data['roles'])
-
-    column = columns[roster_data['column']]
-    html = roster
-      title: roster_data['title']
-    column.append(html)
-    list = column.find('.user_list').last()
-
-    usersView = new RosterView
-      collection: users
-      el: list
-      fetchOptions: usersOptions
-
-    users.on('reset', usersView.render, usersView)
-    usersView.$el.disableWhileLoading(users.fetch(usersOptions))

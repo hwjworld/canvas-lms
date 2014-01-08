@@ -24,14 +24,16 @@ class EportfolioCategory < ActiveRecord::Base
   belongs_to :eportfolio
   before_save :infer_unique_slug
   validates_presence_of :eportfolio_id
-  
+  validates_length_of :name, :maximum => maximum_string_length, :allow_blank => true
+
   acts_as_list :scope => :eportfolio
   
   def infer_unique_slug
     categories = self.eportfolio.eportfolio_categories
     self.name ||= t(:default_section, "Section Name")
     self.slug = self.name.gsub(/[\s]+/, "_").gsub(/[^\w\d]/, "")
-    match_cnt = categories.select{|c| c != self && c.slug && c.slug == self.slug}.length
+    categories = categories.where("id<>?", self) unless self.new_record?
+    match_cnt = categories.where(:slug => self.slug).count
     if match_cnt > 0
       self.slug = self.slug + "_" + (match_cnt + 1).to_s
     end

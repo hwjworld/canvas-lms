@@ -2,9 +2,9 @@ require File.expand_path(File.dirname(__FILE__) + '/helpers/conversations_common
 
 describe "conversations group" do
   it_should_behave_like "in-process server selenium tests"
-  it_should_behave_like "conversations selenium tests"
 
   before(:each) do
+    conversation_setup
     @course.update_attribute(:name, "the course")
     @course.default_section.update_attribute(:name, "the section")
     @other_section = @course.course_sections.create(:name => "the other section")
@@ -27,13 +27,13 @@ describe "conversations group" do
     level = 1
 
     @input.send_keys(name)
-    wait_for_ajaximations(150)
+    wait_for_ajaximations(250)
     loop do
       keep_trying_until { ffj('.autocomplete_menu:visible .list').size == level }
       driver.execute_script("return $('.autocomplete_menu:visible .list').last().find('ul').last().find('li').toArray();").detect { |e|
         (e.find_element(:tag_name, :b).text rescue e.text) == name
       }.click
-      wait_for_ajaximations
+      wait_for_ajaximations(250)
 
       break if names.empty?
 

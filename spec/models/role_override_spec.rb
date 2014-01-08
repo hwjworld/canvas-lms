@@ -62,7 +62,7 @@ describe RoleOverride do
 
   it "should not fail when a context's associated accounts are missing" do
     group_model
-    @group.account.should be_nil
+    @group.stubs(:account).returns(nil)
     lambda {
       RoleOverride.permission_for(@group, :read_course_content, "TeacherEnrollment")
     }.should_not raise_error
@@ -243,6 +243,46 @@ describe RoleOverride do
       permission_data[:prior_default].should be_false
     end
 
+    context 'using :account_allows' do
+      it "should be enabled for account if not specified" do
+        permission_data = RoleOverride.permission_for(@account, :undelete_courses,
+                                                      'AccountMembership', 'AccountAdmin')
+        permission_data[:account_allows].should be_true
+        permission_data[:enabled].should be_true
+        permission_data[:explicit].should be_false
+      end
+
+      it "should be enabled for account if not specified" do
+        permission_data = RoleOverride.permission_for(@account, :view_grade_changes,
+                                                      'AccountMembership', 'AccountAdmin')
+        permission_data[:account_allows].should be_true
+        permission_data[:enabled].should be_true
+        permission_data[:explicit].should be_false
+      end
+
+      it "should be enabled for account if specified" do
+        root_account = @account.root_account
+        root_account.settings[:admins_can_view_notifications] = true
+        root_account.save!
+        permission_data = RoleOverride.permission_for(@account, :view_notifications,
+                                                      'AccountMembership', 'AccountAdmin')
+        permission_data[:account_allows].should be_true
+        permission_data[:enabled].should be_false
+        permission_data[:explicit].should be_false
+      end
+
+      it "should be disabled for account if lambda evaluates to false" do
+        root_account = @account.root_account
+        root_account.settings[:admins_can_view_notifications] = false
+        root_account.save!
+        permission_data = RoleOverride.permission_for(@account, :view_notifications,
+                                                      'AccountMembership', 'AccountAdmin')
+        permission_data[:account_allows].should be_false
+        permission_data[:enabled].should be_false
+        permission_data[:explicit].should be_false
+      end
+    end
+
     context "admin roles" do
       it "should special case AccountAdmin role to use AccountAdmin as base role" do
         # the default base role type has no permissions, so this tests it is getting
@@ -265,6 +305,13 @@ describe RoleOverride do
         create_role(AccountUser::BASE_ROLE_NAME, @role_name)
 
         check_permission(AccountUser::BASE_ROLE_NAME, @role_name, false)
+      end
+
+      it "should default :view_notifications to false" do
+        create_role(AccountUser::BASE_ROLE_NAME, @role_name)
+        permission_data = RoleOverride.permission_for(@account, @permission, 'AccountMembership', @role_name)
+        permission_data[:enabled].should be_false
+        permission_data[:explicit].should be_false
       end
     end
 
@@ -375,7 +422,7 @@ describe RoleOverride do
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should find role overrides on a non-current shard" do
         @shard1.activate do
@@ -413,6 +460,34 @@ describe RoleOverride do
       RoleOverride.enabled_for?(Account.site_admin, Account.site_admin, :manage_role_overrides, 'AccountMembership', 'role').should == [:self]
       # applying to Default Account, should be disabled
       RoleOverride.enabled_for?(Account.site_admin, Account.default, :manage_role_overrides, 'AccountMembership', 'role').should == []
+    end
+  end
+
+  context "enabled_for_plugin" do
+    before(:each) do
+      account_model
+    end
+
+    it "should not show a permission if the specified plugin does not exist" do
+      RoleOverride.manageable_permissions(@account).keys.should_not include(:manage_frozen_assignments)
+    end
+
+    it "should not show a permission if the specified plugin is not enabled" do
+      p = Canvas::Plugin.register(:assignment_freezer, :assignment_freezer, {
+        :settings => {:foo => true}})
+      s = PluginSetting.new(:name => p.id, :settings => p.default_settings)
+      s.disabled = true
+      s.save!
+      RoleOverride.manageable_permissions(@account).keys.should_not include(:manage_frozen_assignments)
+    end
+
+    it "should include show a permission if the specified plugin is enabled" do
+      p = Canvas::Plugin.register(:assignment_freezer, :assignment_freezer, {
+        :settings => {:foo => true}})
+      s = PluginSetting.new(:name => p.id, :settings => p.default_settings)
+      s.disabled = false
+      s.save!
+      RoleOverride.manageable_permissions(@account).keys.should include(:manage_frozen_assignments)
     end
   end
 end

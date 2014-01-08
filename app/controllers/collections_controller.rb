@@ -35,29 +35,30 @@
 # @object Collection
 #     {
 #       // The ID of the collection.
-#       id: 5,
+#       "id": 5,
 #
 #       // The display name of the collection, set by the collection creator.
-#       name: "My Collection",
+#       "name": "My Collection",
 #
 #       // The visibility of the collection. If "public", the collection is
 #       // visible to everybody, and can be followed.  If "private", the
 #       // collection is visible only to the creating user.
 #       // The default is "private".
-#       visibility: "public",
+#       "visibility": "public",
 #
 #       // Boolean indicating whether this user is following this collection.
-#       followed_by_user: false,
+#       "followed_by_user": false,
 #
 #       // The number of people following this collection.
-#       followers_count: 10,
+#       "followers_count": 10,
 #
 #       // The number of items in this collection.
-#       items_count: 7
+#       "items_count": 7
 #     }
 #
 class CollectionsController < ApplicationController
   before_filter :render_backbone_app_if_html_request
+  before_filter :require_user
   before_filter :require_context, :only => [:index, :create]
 
   include Api::V1::Collection
@@ -112,13 +113,13 @@ class CollectionsController < ApplicationController
     # make sure there is a default colleciton for the current user and all
     # communities to which they belong
     ensure_default_collection_for(@current_user)
-    current_communities = @current_user.current_groups.scoped(:joins => :group_category, :conditions => { :group_categories => { :role => 'communities' } }).all
+    current_communities = @current_user.current_groups.joins(:group_category).where(:group_categories => { :role => 'communities' }).all
     if current_communities.present?
       preload_groups_collections_counts(current_communities)
       current_communities.each{ |g| ensure_default_collection_for(g) }
     end
 
-    scope = Collection.active.newest_first.scoped(:conditions => [<<-SQL, @current_user.id, current_communities.map(&:id)])
+    scope = Collection.active.newest_first.where(<<-SQL, @current_user, current_communities)
       (context_type='User' AND context_id=?) OR (context_type='Group' AND context_id IN (?))
     SQL
 
@@ -148,8 +149,9 @@ class CollectionsController < ApplicationController
   # Creates a new collection. You can only create collections on your own user,
   # or on a group to which you belong.
   #
-  # @argument name
-  # @argument visibility
+  # @argument name [String]
+  #
+  # @argument visibility [String, "public"|"private"]
   #
   # @example_request
   #     curl -H 'Authorization: Bearer <token>' \ 
@@ -175,9 +177,11 @@ class CollectionsController < ApplicationController
   #
   # Collection visibility cannot be modified once the collection is created.
   #
-  # @argument name
-  # @argument visibility Be advised that setting a public collection to private
-  #     will permanantly remove all of its followers.
+  # @argument name [String]
+  #
+  # @argument visibility [String, "public"|"private"]
+  #    Be advised that setting a public collection to private will permanantly
+  #    remove all of its followers.
   #
   # @example_request
   #     curl -H 'Authorization: Bearer <token>' \ 
@@ -265,7 +269,7 @@ class CollectionsController < ApplicationController
   def unfollow
     @collection = find_collection
     if authorized_action(@collection, @current_user, :follow)
-      user_follow = @current_user.user_follows.find(:first, :conditions => { :followed_item_id => @collection.id, :followed_item_type => 'Collection' })
+      user_follow = @current_user.user_follows.where(:followed_item_id => @collection, :followed_item_type => 'Collection').first
       user_follow.try(:destroy)
       render :json => { "ok" => true }
     end

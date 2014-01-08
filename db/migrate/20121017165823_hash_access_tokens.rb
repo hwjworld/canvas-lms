@@ -1,6 +1,6 @@
 class HashAccessTokens < ActiveRecord::Migration
   tag :postdeploy
-  self.transactional = false
+  disable_ddl_transaction!
 
   def self.up
     loop do
@@ -15,7 +15,7 @@ class HashAccessTokens < ActiveRecord::Migration
           :token_hint => at['token'][0,5],
           :crypted_token => AccessToken.hashed_token(at['token']),
         }
-        AccessToken.update_all(updates, { :id => at['id'] })
+        AccessToken.where(:id => at['id']).update_all(updates)
       end
     end
   end

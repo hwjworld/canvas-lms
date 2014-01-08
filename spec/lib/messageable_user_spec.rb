@@ -32,12 +32,13 @@ describe "MessageableUser" do
 
     it "should combine common_course_column and common_role_column in common_courses" do
       course_with_student(:active_all => true)
-      messageable_user = MessageableUser.find(:first,
-        :select => MessageableUser.build_select(
+      messageable_user = MessageableUser.
+        select(MessageableUser.build_select(
           :common_course_column => "'course_column'",
-          :common_role_column => "'role_column'"),
-        :conditions => {:id => @student.id},
-        :group => MessageableUser.connection.group_by(*MessageableUser::COLUMNS))
+          :common_role_column => "'role_column'")).
+        where(:id => @student).
+        group(MessageableUser.connection.group_by(*MessageableUser::COLUMNS)).
+        first
       messageable_user.send(:read_attribute, :common_courses).
         should == "course_column:role_column"
     end
@@ -45,13 +46,14 @@ describe "MessageableUser" do
     it "should combine multiple (course,role) pairs in common_courses" do
       course_with_ta(:active_all => true)
       multiple_student_enrollment(@ta, @course.course_sections.create!)
-      messageable_user = MessageableUser.find(:first,
-        :select => MessageableUser.build_select(
+      messageable_user = MessageableUser.
+        select(MessageableUser.build_select(
           :common_course_column => "'course'",
-          :common_role_column => 'enrollments.type'),
-        :joins => 'INNER JOIN enrollments ON enrollments.user_id=users.id',
-        :conditions => {:id => @ta.id},
-        :group => MessageableUser.connection.group_by(*MessageableUser::COLUMNS))
+          :common_role_column => 'enrollments.type')).
+        joins('INNER JOIN enrollments ON enrollments.user_id=users.id').
+        where(:id => @ta.id).
+        group(MessageableUser.connection.group_by(*MessageableUser::COLUMNS)).
+        first
       messageable_user.send(:read_attribute, :common_courses).split(/,/).sort.
         should == ["course:StudentEnrollment", "course:TaEnrollment"]
     end
@@ -59,11 +61,12 @@ describe "MessageableUser" do
     it "should combine multiple common_group_column values in common_groups" do
       group1 = group_with_user(:active_all => true).group
       group2 = group_with_user(:user => @user, :active_all => true).group
-      messageable_user = MessageableUser.find(:first,
-        :select => MessageableUser.build_select(:common_group_column => "group_memberships.group_id"),
-        :joins => 'INNER JOIN group_memberships ON group_memberships.user_id=users.id',
-        :conditions => {:id => @user.id},
-        :group => MessageableUser.connection.group_by(*MessageableUser::COLUMNS))
+      messageable_user = MessageableUser.
+        select(MessageableUser.build_select(:common_group_column => "group_memberships.group_id")).
+        joins('INNER JOIN group_memberships ON group_memberships.user_id=users.id').
+        where(:id => @user).
+        group(MessageableUser.connection.group_by(*MessageableUser::COLUMNS)).
+        first
       messageable_user.send(:read_attribute, :common_groups).split(/,/).map(&:to_i).sort.
         should == [group1.id, group2.id].sort
     end
@@ -127,27 +130,37 @@ describe "MessageableUser" do
 
     it "should exclude creation_pending students with strict_checks true" do
       user(:user_state => 'creation_pending')
-      MessageableUser.prepped(:strict_checks => true).count.should == 0
-    end
-
-    it "should exclude deleted students with strict_checks true" do
-      user(:user_state => 'deleted')
-      MessageableUser.prepped(:strict_checks => true).count.should == 0
+      MessageableUser.prepped(:strict_checks => true).length.should == 0
     end
 
     it "should include creation_pending students with strict_checks false" do
       user(:user_state => 'creation_pending')
-      MessageableUser.prepped(:strict_checks => false).count.should == 1
+      MessageableUser.prepped(:strict_checks => false).length.should == 1
     end
 
-    it "should include deleted students with strict_checks false" do
+    it "should exclude deleted students with include_deleted true but strict_checks true" do
       user(:user_state => 'deleted')
-      MessageableUser.prepped(:strict_checks => false).count.should == 1
+      MessageableUser.prepped(:strict_checks => true, :include_deleted => true).length.should == 0
+    end
+
+    it "should exclude deleted students with with strict_checks false but include_deleted false" do
+      user(:user_state => 'deleted')
+      MessageableUser.prepped(:strict_checks => false, :include_deleted => false).length.should == 0
+    end
+
+    it "should include deleted students with strict_checks false and include_deleted true" do
+      user(:user_state => 'deleted')
+      MessageableUser.prepped(:strict_checks => false, :include_deleted => true).length.should == 1
     end
 
     it "should default strict_checks to true" do
       user(:user_state => 'creation_pending')
-      MessageableUser.prepped().count.should == 0
+      MessageableUser.prepped().length.should == 0
+    end
+
+    it "should default include_delete to false" do
+      user(:user_state => 'deleted')
+      MessageableUser.prepped(:strict_checks => false).length.should == 0
     end
   end
 
@@ -167,13 +180,22 @@ describe "MessageableUser" do
     end
 
     describe "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should translate keys to the current shard" do
         user = MessageableUser.prepped(:common_course_column => @shard2.relative_id_for(1), :common_role_column => "'StudentEnrollment'").first
         [Shard.default, @shard1, @shard2].each do |shard|
           shard.activate do
             user.common_courses.should == {@shard2.relative_id_for(1) => ['StudentEnrollment']}
+          end
+        end
+      end
+
+      it "should not translate a 0 key" do
+        user = MessageableUser.prepped(:common_course_column => 0, :common_role_column => "'StudentEnrollment'").first
+        [Shard.default, @shard1, @shard2].each do |shard|
+          shard.activate do
+            user.common_courses.should == {0 => ['StudentEnrollment']}
           end
         end
       end
@@ -196,7 +218,7 @@ describe "MessageableUser" do
     end
 
     describe "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should translate keys to the current shard" do
         user = MessageableUser.prepped(:common_group_column => @shard2.relative_id_for(1)).first
@@ -206,6 +228,32 @@ describe "MessageableUser" do
           end
         end
       end
+    end
+  end
+
+  describe "#include_common_contexts_from" do
+    before do
+      user(:active_all => 1)
+    end
+
+    it "should merge disparate ids" do
+      # e.g. two copies of the user from different shards with course
+      # visibility on each
+      user1 = MessageableUser.prepped(:common_course_column => 1, :common_role_column => "'StudentEnrollment'").first
+      user2 = MessageableUser.prepped(:common_course_column => 2, :common_role_column => "'StudentEnrollment'").first
+      user1.include_common_contexts_from(user2)
+      user1.common_courses[1].should include('StudentEnrollment')
+      user1.common_courses[2].should include('StudentEnrollment')
+    end
+
+    it "should stack coinciding ids" do
+      # e.g. two copies of the user from different shards with admin visibility
+      # on each
+      user1 = MessageableUser.prepped(:common_course_column => 0, :common_role_column => "'StudentEnrollment'").first
+      user2 = MessageableUser.prepped(:common_course_column => 0, :common_role_column => "'TeacherEnrollment'").first
+      user1.include_common_contexts_from(user2)
+      user1.common_courses[0].should include('StudentEnrollment')
+      user1.common_courses[0].should include('TeacherEnrollment')
     end
   end
 end

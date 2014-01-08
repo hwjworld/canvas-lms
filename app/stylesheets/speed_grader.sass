@@ -2,13 +2,13 @@
 #content
   padding: 0
 
-#gradebook_header a.ui-selectmenu:hover, 
+#gradebook_header a.ui-selectmenu:hover,
 #gradebook_header a.ui-selectmenu:focus
   :background-color white
   :text-decoration none
 .ui-selectmenu-menu a:focus
   :background-color inherit
-  
+
 #speed_grader_loading
   padding: 5px
   font-size: 24px
@@ -16,7 +16,7 @@
   form
     margin: 0
   background: url("/images/canvas/header_bg.png") repeat-x left -28px
-  :padding 8px 25px 10px 8px
+  :padding 8px 25px 5px 8px
   :font-size 11px
   :text-align center
   color: #fff
@@ -71,7 +71,7 @@
       :float left
       :outline none
       &:hover, &:focus
-        :background-position     left -31px 
+        :background-position     left -31px
       &:active
         :background-position     bottom left
     .next
@@ -88,7 +88,7 @@
   height: 26px
   width: 135px
   display: block
-        
+
 #settings_link, #mute_link
   position: relative
   .ui-icon
@@ -138,7 +138,7 @@
     position: relative
     top: -100%
     z-index: 1
-  h3
+  h3, .h3
     margin: 0
     padding: 2em
     text-align: center
@@ -149,7 +149,7 @@
 
 
 #width_resizer
-  background: #bbb url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50% 
+  background: #bbb url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50%
   cursor: pointer
   height: 100%
   width: 7px
@@ -177,17 +177,17 @@
 
   #rubric_summary_holder
     border-top: 1px dashed #bbb
-        
+
   #rubric_summary_container
     border-top: 1px solid #aaa
     overflow: auto
-    
-  #rugric_assessments_list_and_edit_button_holder
+
+  #rubric_assessments_list_and_edit_button_holder
     padding-top: 0
     .button-container
       display: inline
-    
-    
+
+
 
   div.comment
     margin: 3px
@@ -197,16 +197,14 @@
       color: #888888
       font-size: 0.8em
       text-align: right
-    .delete_comment_link 
+    .delete_comment_link
       float: right
-      .ui-icon
-        opacity: 0.2
+      color: #666
+      opacity: 0.5
       &:hover, &:focus
-        background-color: none
-        .ui-icon
-          opacity: 1
+        opacity: 1
 
-  h2
+  h2, .h2
     background: #E3E3E3 url('/images/h2_bg.png') repeat-x scroll 0% 36%
     border-bottom: 1px solid #838383
     border-top: 1px solid #999
@@ -222,7 +220,7 @@
     padding: 6px 3px
 
 
-  
+
 
   #rightside_inner
     position: relative
@@ -232,7 +230,7 @@
       margin-left: 0 /*for some reason webkit leaves a gap next to the scroll bar if this has margin-left: 8px but it works fine without it */
 
 
-#rubric_full h2, #grading h2
+#rubric_full h2, #rubric_full .h2, #grading h2, #grading .h2
   margin-top: 0 !important
   border-top: 0px none !important
 
@@ -245,10 +243,10 @@
   +border-bottom-left-radius(5px)
   background-color: #E9E9E9
   z-index: 1000
-  
+
   .content_box
     padding-right: 24px
-  
+
   #rubric_full_resizer
     position: absolute
     top: 0
@@ -260,11 +258,11 @@
       position: absolute
       top: 50%
       left: 0px
-      background: transparent url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50% 
+      background: transparent url('/images/splitpane_handle-ew.gif') no-repeat scroll 50% 50%
       cursor: pointer
       height: 20px
       width: 7px
-    
+
   a.big_link
     display: none
 
@@ -282,7 +280,7 @@
     .avatar
       height: 30px
       max-width: 30px
-        
+
 
 #add_a_comment
   background-color: #f0f0f0
@@ -359,7 +357,7 @@
     width: 94% /*hack for IE6 */
     max-height: 200px
     font-size: 13px
-    
+
 html > body #add_a_comment textarea
   width: 97% /* for everyone else */
 
@@ -471,7 +469,7 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
         &.submission_error, &.submission_pending
           padding: 1px
         &:hover
-          font-size: 9px 
+          font-size: 9px
       .submission-file-download
         display: block
         +opacity(0.5)
@@ -511,11 +509,11 @@ body .ui-selectmenu-dropdown:hover .ui-selectmenu-icon, body .ui-state-active .u
     top: 0
     background-color: #fff
     padding: 0
-    +border-radius(0) 
+    +border-radius(0)
     li
       padding: 0
       margin: 0
-      border: 0 none  
+      border: 0 none
       a
         line-height: 21px
         &.selected

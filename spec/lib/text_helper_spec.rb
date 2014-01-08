@@ -170,8 +170,13 @@ describe TextHelper do
       str = th.format_message("click here: http://www.instructure.com/'onclick=alert(document.cookie)//\nnewline").first
       html = Nokogiri::HTML::DocumentFragment.parse(str)
       link = html.css('a').first
-      # we don't match parens in a url, so the link ends on the opening paren
-      link['href'].should == "http://www.instructure.com/%27onclick=alert"
+      link['href'].should == "http://www.instructure.com/%27onclick=alert(document.cookie)//"
+
+      # > ~15 chars in parens used to blow up the parser to take forever
+      str = th.format_message("click here: http://www.instructure.com/(012345678901234567890123456789012345678901234567890)").first
+      html = Nokogiri::HTML::DocumentFragment.parse(str)
+      link = html.css('a').first
+      link['href'].should == "http://www.instructure.com/(012345678901234567890123456789012345678901234567890)"
     end
 
     it "should handle having the placeholder in the text body" do
@@ -189,30 +194,14 @@ describe TextHelper do
     it "should split on multi-byte character boundaries" do
       str = "This\ntext\nhere\n获\nis\nutf-8"
       
-      # In ruby 1.8, unicode characters are counted as multiple characters when calculating length.  
-      # In ruby 1.9, a unicode character is still 1 character.  It seems to me the proper path here
-      # is to allow the counting to take it's course, as the real GOAL of this test is not to 
-      # split mid-unicode-character since that was possible in 1.8.
-
-      if RUBY_VERSION >= '1.9'
-        th.truncate_text(str, :max_length => 9).should ==  "This\nt..."
-        th.truncate_text(str, :max_length => 18).should == "This\ntext\nhere\n..."
-        th.truncate_text(str, :max_length => 19).should == "This\ntext\nhere\n获..."
-        th.truncate_text(str, :max_length => 20).should == "This\ntext\nhere\n获\n..."
-        th.truncate_text(str, :max_length => 21).should == "This\ntext\nhere\n获\ni..."
-        th.truncate_text(str, :max_length => 22).should == "This\ntext\nhere\n获\nis..."
-        th.truncate_text(str, :max_length => 23).should == "This\ntext\nhere\n获\nis\n..."
-        th.truncate_text(str, :max_length => 80).should == str
-      else
-        th.truncate_text(str, :max_length => 9).should ==  "This\nt..."
-        th.truncate_text(str, :max_length => 18).should == "This\ntext\nhere\n..."
-        th.truncate_text(str, :max_length => 19).should == "This\ntext\nhere\n..."
-        th.truncate_text(str, :max_length => 20).should == "This\ntext\nhere\n..."
-        th.truncate_text(str, :max_length => 21).should == "This\ntext\nhere\n获..."
-        th.truncate_text(str, :max_length => 22).should == "This\ntext\nhere\n获\n..."
-        th.truncate_text(str, :max_length => 23).should == "This\ntext\nhere\n获\ni..."
-        th.truncate_text(str, :max_length => 80).should == str
-      end
+      th.truncate_text(str, :max_length => 9).should ==  "This\nt..."
+      th.truncate_text(str, :max_length => 18).should == "This\ntext\nhere\n..."
+      th.truncate_text(str, :max_length => 19).should == "This\ntext\nhere\n获..."
+      th.truncate_text(str, :max_length => 20).should == "This\ntext\nhere\n获\n..."
+      th.truncate_text(str, :max_length => 21).should == "This\ntext\nhere\n获\ni..."
+      th.truncate_text(str, :max_length => 22).should == "This\ntext\nhere\n获\nis..."
+      th.truncate_text(str, :max_length => 23).should == "This\ntext\nhere\n获\nis\n..."
+      th.truncate_text(str, :max_length => 80).should == str
     end
 
     it "should split on words if specified" do
@@ -265,6 +254,35 @@ describe TextHelper do
 
     it "should return an empty string if passed a nil value" do
       th.html_to_text(nil).should == ''
+    end
+  end
+
+  describe "simplify html" do
+    before(:each) do
+      @body = <<-END.strip_heredoc.strip
+        <p><strong>This is a bold tag</strong></p>
+        <p><em>This is an em tag</em></p>
+        <h1>This is an h1 tag</h1>
+        <h2>This is an h2 tag</h2>
+        <h3>This is an h3 tag</h3>
+        <h4>This is an h4 tag</h4>
+        <h5>This is an h5 tag</h5>
+        <h6>This is an h6 tag</h6>
+        <p><a href="http://foo.com">Link to Foo</a></p>
+        <p><img src="http://google.com/someimage.png" width="50" height="50" alt="Some Image" title="Some Image" /></p>
+      END
+    end
+
+    it "should convert simple tags to minimal html" do
+      html = th.html_to_simple_html(@body).gsub("\r\n", "\n")
+      html.should_not match(/<h[1-6]|img/)
+    end
+
+    it "should convert relative links to absolute links" do
+      original_html = %q{ <a href="/relative/link">Relative link</a> }
+      html          = th.html_to_simple_html(original_html, base_url: 'http://example.com')
+
+      html.should match(%r{http://example.com/relative/link})
     end
   end
 
@@ -349,16 +367,12 @@ Ad dolore andouille meatball irure, ham hock tail exercitation minim ribeye sint
     }
   
     test_strings.each do |input, output|
-      input = input.dup.force_encoding("UTF-8") if RUBY_VERSION >= '1.9'
+      input = input.dup.force_encoding("UTF-8")
       TextHelper.strip_invalid_utf8(input).should == output
     end
   end
 
   describe "YAML invalid UTF8 stripping" do
-    before do
-      pending("ruby 1.9 only") if RUBY_VERSION < "1.9"
-    end
-
     it "should recursively strip out invalid utf-8" do
       data = YAML.load(%{
 ---
@@ -400,8 +414,8 @@ answers:
  position: 2
       }.force_encoding('binary').strip
       # now actually insert it into an AR column
-      aq = assessment_question_model
-      AssessmentQuestion.update_all({ :question_data => yaml_blob }, { :id => aq.id })
+      aq = assessment_question_model(bank: AssessmentQuestionBank.create!(context: Course.create!))
+      AssessmentQuestion.where(:id => aq).update_all(:question_data => yaml_blob)
       text = aq.reload.question_data['answers'][0]['valid_ascii']
       text.should == "text"
       text.encoding.should == Encoding::UTF_8
@@ -416,7 +430,7 @@ answers:
 
       it "should strip columns on the list" do
         TextHelper.unstub(:recursively_strip_invalid_utf8!)
-        aq = assessment_question_model
+        aq = assessment_question_model(bank: AssessmentQuestionBank.create!(context: Course.create!))
         TextHelper.expects(:recursively_strip_invalid_utf8!).with(instance_of(HashWithIndifferentAccess), true)
         aq = AssessmentQuestion.find(aq)
         aq.question_data

@@ -44,13 +44,23 @@ describe ConversationParticipant do
     convo.remove_messages(convo.messages.last)
     convo.messages.reload
     convo.messages.size.should == 1
+    convo.all_messages.size.should == 2
     # the recipient's messages are unaffected, since removing a message
-    # only removes it from the join table
+    # only sets workflow state on the join table.
     rconvo.messages.size.should == 2
 
     convo.remove_messages(:all)
+    convo.messages.size.should == 0
+    convo.all_messages.size.should == 2
     rconvo.reload
     rconvo.messages.size.should == 2
+
+    convo.delete_messages(:all)
+    convo.all_messages.size.should == 0
+
+    rconvo.delete_messages(rconvo.messages.last)
+    rconvo.messages.size.should == 1
+    rconvo.all_messages.size.should == 1
   end
 
   it "should update the updated_at stamp of its user on workflow_state change" do
@@ -151,6 +161,18 @@ describe ConversationParticipant do
 
     it "should return conversations that match both the given course and user" do
       @me.conversations.tagged(@u1.asset_string, "course_1", :mode => :and).sort_by(&:id).should eql [@c8]
+    end
+
+    context "sharding" do
+      specs_require_sharding
+
+      it "should find conversations for users on different shards" do
+        @shard1.activate do
+          @u3 = user
+          @c9 = conversation_for(@u3)
+        end
+        @me.conversations.tagged(@u3.asset_string).map(&:conversation).should == [@c9.conversation]
+      end
     end
   end
 
@@ -407,7 +429,7 @@ describe ConversationParticipant do
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should be able to move to a user on a different shard" do
         u1 = User.create!

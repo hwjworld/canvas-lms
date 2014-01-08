@@ -34,7 +34,9 @@ module SIS
       end
       User.update_account_associations(importer.users_to_add_account_associations, :incremental => true, :precalculated_associations => {@root_account.id => 0})
       User.update_account_associations(importer.users_to_update_account_associations)
-      Pseudonym.update_all({:sis_batch_id => @batch_id}, {:id => importer.pseudos_to_set_sis_batch_ids}) if @batch && !importer.pseudos_to_set_sis_batch_ids.empty?
+      importer.pseudos_to_set_sis_batch_ids.in_groups_of(1000, false) do |batch|
+        Pseudonym.where(:id => batch).update_all(:sis_batch_id => @batch_id)
+      end if @batch
       @logger.debug("Users took #{Time.now - start} seconds")
       return importer.success_count
     end
@@ -91,13 +93,15 @@ module SIS
             pseudo ||= pseudo_by_login
             pseudo ||= @root_account.pseudonyms.active.by_unique_id(email).first if email.present?
 
+            status_is_active = !(status =~ /\Adeleted/i)
+
             if pseudo
-              if pseudo.sis_user_id.present? && pseudo.sis_user_id != user_id
+              if pseudo.sis_user_id && pseudo.sis_user_id != user_id
                 @messages << "user #{pseudo.sis_user_id} has already claimed #{user_id}'s requested login information, skipping"
                 next
               end
-              if !pseudo_by_login.nil? && pseudo.unique_id != login_id
-                @messages << "user #{pseudo_by_login.sis_user_id} has already claimed #{user_id}'s requested login information, skipping"
+              if pseudo_by_login && (pseudo.unique_id != login_id || pseudo != pseudo_by_login && status_is_active)
+                @messages << "user #{pseudo_by_login.sis_user_id || pseudo_by_login.user_id} has already claimed #{user_id}'s requested login information, skipping"
                 next
               end
 
@@ -120,12 +124,10 @@ module SIS
             should_add_account_associations = false
             should_update_account_associations = false
 
-            status_is_active = !(status =~ /\Adeleted/i)
-
             if !status_is_active && !user.new_record?
               # if this user is deleted, we're just going to make sure the user isn't enrolled in anything in this root account and
               # delete the pseudonym.
-              if 0 < user.enrollments.scoped(:conditions => ["root_account_id = ? AND workflow_state <> ?", @root_account.id, 'deleted']).update_all(:workflow_state => 'deleted')
+              if 0 < user.enrollments.where("root_account_id=? AND workflow_state<>?", @root_account, 'deleted').update_all(:workflow_state => 'deleted')
                 should_update_account_associations = true
               end
             end
@@ -182,7 +184,7 @@ module SIS
               # find all CCs for this user, and active conflicting CCs for all users
               # unless we're deleting this user, then only find CCs for this user
               if status_is_active
-                ccs = CommunicationChannel.scoped(:conditions => ["workflow_state='active' OR user_id=?", user.id])
+                ccs = CommunicationChannel.where("workflow_state='active' OR user_id=?", user)
               else
                 ccs = user.communication_channels
               end
@@ -224,7 +226,7 @@ module SIS
 
               if newly_active
                 other_ccs = ccs.reject { |other_cc| other_cc.user_id == user.id || other_cc.user.nil? || other_cc.user.pseudonyms.active.count == 0 ||
-                  !other_cc.user.pseudonyms.active.scoped(:conditions => ['account_id=? AND sis_user_id IS NOT NULL', @root_account.id]).empty? }
+                  !other_cc.user.pseudonyms.active.where("account_id=? AND sis_user_id IS NOT NULL", @root_account).empty? }
                 unless other_ccs.empty?
                   cc.send_merge_notification!
                 end

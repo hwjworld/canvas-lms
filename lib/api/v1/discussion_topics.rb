@@ -20,8 +20,12 @@ module Api::V1::DiscussionTopics
   include Api::V1::Json
   include Api::V1::User
   include Api::V1::Attachment
+  include Api::V1::Locked
 
   def discussion_topics_api_json(topics, context, user, session)
+    # remove the topics which are not visible for the current user from the returned list of topics
+    topics.reject! { |t| !t.visible_for?(user, :check_policies => true) }
+
     topics.map do |topic|
       discussion_topic_api_json(topic, context, user, session)
     end
@@ -39,20 +43,26 @@ module Api::V1::DiscussionTopics
       url = feeds_topic_format_path(topic.id, code, :rss)
     end
 
-    children = topic.child_topics.scoped(:select => 'id').map(&:id)
+    children = topic.child_topics.pluck(:id)
 
     api_json(topic, user, session, {
-                  :only => %w(id title assignment_id delayed_post_at last_reply_at posted_at root_topic_id podcast_has_student_posts),
+                  :only => %w(id title assignment_id delayed_post_at lock_at last_reply_at posted_at root_topic_id podcast_has_student_posts),
                   :methods => [:user_name, :discussion_subentry_count], }, [:attach, :update, :delete]
     ).tap do |json|
       json.merge! :message => api_user_content(topic.message, context),
                   :discussion_type => topic.discussion_type,
                   :require_initial_post => topic.require_initial_post?,
+                  :user_can_see_posts => topic.user_can_see_posts?(user),
                   :podcast_url => url,
+                  :pinned => !!topic.pinned,
+                  :position => topic.position,
                   :read_state => topic.read_state(user),
                   :unread_count => topic.unread_count(user),
+                  :subscribed => topic.subscribed?(user),
                   :topic_children => children,
                   :attachments => attachments,
+                  :published => topic.published?,
+                  :can_unpublish => topic.can_unpublish?,
                   :locked => topic.locked?,
                   :author => user_display_json(topic.user, topic.context),
                   :html_url => context.is_a?(CollectionItem) ? nil :
@@ -60,10 +70,13 @@ module Api::V1::DiscussionTopics
                                             :context_discussion_topic_url,
                                             topic,
                                             :include_host => true)
+      subscription_hold = topic.subscription_hold(user, @context_enrollment, session)
+      json[:subscription_hold] = subscription_hold if subscription_hold
+      locked_json(json, topic, user, session)
       json[:url] = json[:html_url] # deprecated
       if include_assignment && topic.assignment
         extend Api::V1::Assignment
-        json[:assignment] = assignment_json(topic.assignment, user, session, !:include_discussion_topic)
+        json[:assignment] = assignment_json(topic.assignment, user, session, include_discussion_topic: false)
       end
       json
     end
@@ -93,10 +106,15 @@ module Api::V1::DiscussionTopics
           json[:attachments] = [json[:attachment]]
         end
       end
-      json[:read_state] = entry.read_state(user) if user
+
+      if user
+        participant = entry.find_existing_participant(user)
+        json[:read_state] = participant.workflow_state
+        json[:forced_read_state] = participant.forced_read_state?
+      end
 
       if includes.include?(:subentries) && entry.root_entry_id.nil?
-        replies = entry.flattened_discussion_subentries.active.newest_first.find(:all, :limit => 11).to_a
+        replies = entry.flattened_discussion_subentries.active.newest_first.limit(11).all
         unless replies.empty?
           json[:recent_replies] = discussion_entry_api_json(replies.first(10), context, user, session, includes)
           json[:has_more_replies] = replies.size > 10

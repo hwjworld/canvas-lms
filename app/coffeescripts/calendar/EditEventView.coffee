@@ -21,11 +21,12 @@ define [
 
     events:
       'submit form': 'submit'
-      'change [name="use_section_dates"]': 'toggleUseSectionDates'
+      'change #use_section_dates': 'toggleUseSectionDates'
       'click .delete_link': 'destroyModel'
       'click .switch_event_description_view': 'toggleHtmlView'
 
     initialize: ->
+      super
       @model.fetch().done =>
         if ENV.NEW_CALENDAR_EVENT_ATTRIBUTES
           attrs = @model.parse(ENV.NEW_CALENDAR_EVENT_ATTRIBUTES)
@@ -37,7 +38,7 @@ define [
       @model.on 'change:use_section_dates', @toggleUsingSectionClass
 
     render: =>
-      @$el.html @template(@model.toJSON('forView'))
+      super
 
       @$(".date_field").date_field()
       @$(".time_field").time_field()
@@ -75,17 +76,16 @@ define [
     submit: (event) ->
       event?.preventDefault()
       eventData = unflatten @$el.getFormData()
-      # force use_section_dates to boolean, so it doesnt cause 'change' if it is '1'
-      eventData.use_section_dates = !!eventData.use_section_dates
+      eventData.use_section_dates = eventData.use_section_dates is '1'
       _.each [eventData].concat(eventData.child_event_data), @setStartEnd
       delete eventData.child_event_data if eventData.remove_child_events == '1'
 
-      if $('[name=use_section_dates]').prop('checked')
+      if $('#use_section_dates').prop('checked')
         dialog = new MissingDateDialogView
           validationFn: ->
             $fields = $('[name*=start_date]:visible').filter -> $(this).val() is ''
             if $fields.length > 0 then $fields else true
-          labelFn   : (input) -> $(input).parents('td:first').prev().find('label').text()
+          labelFn   : (input) -> $(input).parents('tr').prev().find('label').text()
           success   : ($dialog) =>
             $dialog.dialog('close')
             @$el.disableWhileLoading @model.save eventData, success: =>

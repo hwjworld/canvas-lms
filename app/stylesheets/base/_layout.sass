@@ -1,10 +1,12 @@
+@import mixins/blue
+
 body, html
   height: 100%
 body
-  background-image: url("/images/blue/bg.jpg")
+  +bg-image('blue/bg', 'jpg', repeat, left, top, transparent, 150px, 150px)
   min-width: $min_main_width
 
-  &.no-headers
+  &.no-headers, &.embedded
     #header, #topbar, #left-side, #breadcrumbs
       display: none !important
     #footer
@@ -27,6 +29,16 @@ body
       min-height: 0
     #content
       padding: 1em
+    h2, .h2
+      @include ui-widget-header-bg-and-text
+      font-size: 14px
+      font-weight: bold
+      margin: -0.95em -0.95em 1em
+      padding: 0.4em 1em
+      line-height: 20px
+    &.no-headers
+      h2, .h2
+        display: none
     .embedded-footer
       position: absolute
       bottom: 0
@@ -52,7 +64,7 @@ body
 
 // so we don't get the non-interactionable content
 .scripts-not-loaded
-  a, button
+  a:not([href]), a[href="#"], button:not([type])
     visibility: hidden !important
 
 #wrapper-container
@@ -123,9 +135,6 @@ body
   #content, #right-side-wrapper
     +single-transition(opacity, 0.3s)
     +opacity(1)
-.scripts-not-loaded
-  #content, #right-side-wrapper
-    +opacity(0)
 
 
 // **********************************************************************************
@@ -168,16 +177,19 @@ body
   color: #5c5c5c
   font-size: 11px
   margin: 0 15px 34px
-  img
-    vertical-align: bottom
-    padding: 0 20px 3px 0
+  .footer-logo
+    +bg-image('footer-logo', 'png', no-repeat, left, top, transparent, 140px, 10px)
+    display: inline-block
+    height: 10px
+    margin: 0 20px 0 0
+    width: 140px
 
 #footer-links
   a
     border-left: 1px solid #5C5C5C
     color: #5C5C5C
-    margin-right: 0.4em
-    padding-left: 0.4em
+    padding-right: 2px
+    padding-left: 5px
     &:hover, &:focus
       text-decoration: underline
     // ie7 supports :first-child so this will work on everything we support.

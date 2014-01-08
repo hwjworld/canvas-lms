@@ -17,6 +17,8 @@
 #
 
 class ConferencesController < ApplicationController
+  include Api::V1::Conferences
+
   before_filter :require_context
   add_crumb(proc{ t '#crumbs.conferences', "Conferences"}) { |c| c.send(:named_context_url, c.instance_variable_get("@context"), :context_conferences_url) }
   before_filter { |c| c.active_tab = "conferences" }
@@ -25,7 +27,12 @@ class ConferencesController < ApplicationController
   before_filter :get_conference, :except => [:index, :create]
 
   def index
-    @conferences = @context.web_conferences.select{|c| c.grants_right?(@current_user, session, :read) }
+    @new_conferences, @concluded_conferences = @context.web_conferences.select { |conference|
+      conference.grants_right?(@current_user, session, :read)
+    }.partition { |conference|
+      conference.ended_at.nil?
+    }
+
     if authorized_action(@context, @current_user, :read)
       return unless tab_enabled?(@context.class::TAB_CONFERENCES)
       log_asset_access("conferences:#{@context.asset_string}", "conferences", "other")
@@ -34,10 +41,18 @@ class ConferencesController < ApplicationController
       if @context.respond_to?(:participating_typical_users)
         scope = @context.participating_typical_users
       end
-      @users = scope.scoped({
-        :conditions => ["users.id <> ?", @current_user.id],
-        :order => User.sortable_name_order_by_clause
-      }).all.uniq
+      @users = scope.where("users.id<>?", @current_user).order(User.sortable_name_order_by_clause).all.uniq
+
+      permissions = {:permissions => {:user => @current_user, :session => session}}
+      # exposing the initial data as json embedded on page.
+      js_env(
+        current_conferences: conferences_json(@new_conferences, @context, @current_user, session),
+        concluded_conferences: conferences_json(@concluded_conferences, @context, @current_user, session),
+        default_conference: default_conference_json(@context, @current_user, session),
+        conference_type_details: conference_types_json(WebConference.conference_types),
+        users: @users.map{|u| {:id => u.id, :name => u.last_name_first}},
+      )
+
     end
   end
 
@@ -70,10 +85,11 @@ class ConferencesController < ApplicationController
           end
           @conference.save
           format.html { redirect_to named_context_url(@context, :context_conference_url, @conference.id) }
-          format.json { render :json => WebConference.find(@conference).to_json(:permissions => {:user => @current_user, :session => session}) }
+          format.json { render :json => WebConference.find(@conference).as_json(:permissions => {:user => @current_user, :session => session},
+                                                                                :url => named_context_url(@context, :context_conference_url, @conference)) }
         else
           format.html { render :action => 'index' }
-          format.json { render :json => @conference.errors.to_json, :status => :bad_request }
+          format.json { render :json => @conference.errors, :status => :bad_request }
         end
       end
     end
@@ -93,10 +109,11 @@ class ConferencesController < ApplicationController
           end
           @conference.save
           format.html { redirect_to named_context_url(@context, :context_conference_url, @conference.id) }
-          format.json { render :json => @conference.to_json(:permissions => {:user => @current_user, :session => session}) }
+          format.json { render :json => @conference.as_json(:permissions => {:user => @current_user, :session => session},
+                                                            :url => named_context_url(@context, :context_conference_url, @conference)) }
         else
           format.html { render :action => "edit" }
-          format.json { render :json => @conference.errors.to_json, :status => :bad_request }
+          format.json { render :json => @conference.errors, :status => :bad_request }
         end
       end
     end
@@ -125,14 +142,18 @@ class ConferencesController < ApplicationController
         redirect_to named_context_url(@context, :context_url)
       end
     end
+  rescue StandardError => e
+    flash[:error] = t(:general_error_with_message, "There was an error joining the conference. Message: '%{message}'", :message => e.message)
+    redirect_to named_context_url(@context, :context_conferences_url)
   end
 
   def close
     if authorized_action(@conference, @current_user, :close)
       if @conference.close
-        render :json => @conference.to_json(:permissions => {:user => @current_user, :session => session})
+        render :json => @conference.as_json(:permissions => {:user => @current_user, :session => session},
+                                            :url => named_context_url(@context, :context_conference_url, @conference))
       else
-        render :json => @conference.errors.to_json
+        render :json => @conference.errors
       end
     end
   end
@@ -153,7 +174,7 @@ class ConferencesController < ApplicationController
       @conference.destroy
       respond_to do |format|
         format.html { redirect_to named_context_url(@context, :context_conferences_url) }
-        format.json { render :json => @conference.to_json }
+        format.json { render :json => @conference }
       end
     end
   end

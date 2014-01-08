@@ -7,14 +7,14 @@ class AccessToken < ActiveRecord::Base
   serialize :scopes, Array
   validate :must_only_include_valid_scopes
 
+  has_many :communication_channels, dependent: :destroy
+
   # For user-generated tokens, purpose can be manually set.
   # For app-generated tokens, this should be generated based
   # on the scope defined in the auth process (scope has not
   # yet been implemented)
 
-  named_scope :active, lambda {
-    { :conditions => ['expires_at IS NULL OR expires_at > ?', Time.zone.now] }
-  }
+  scope :active, lambda { where("expires_at IS NULL OR expires_at>?", Time.zone.now) }
 
   TOKEN_SIZE = 64
   OAUTH2_SCOPE_NAMESPACE = '/auth/'
@@ -23,7 +23,7 @@ class AccessToken < ActiveRecord::Base
   before_create :generate_token
 
   def self.authenticate(token_string)
-    token = self.first(:conditions => ["crypted_token = ?", hashed_token(token_string)])
+    token = self.where(:crypted_token => hashed_token(token_string)).first
     token = nil unless token.try(:usable?)
     token
   end
@@ -44,8 +44,12 @@ class AccessToken < ActiveRecord::Base
     developer_key.try(:name) || "No App"
   end
 
+  def record_last_used_threshold
+    Setting.get('access_token_last_used_threshold', 10.minutes).to_i
+  end
+
   def used!
-    if !last_used_at || last_used_at < 5.minutes.ago
+    if !last_used_at || last_used_at < record_last_used_threshold.ago
       self.last_used_at = Time.now
       self.save
     end

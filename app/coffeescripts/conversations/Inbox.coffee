@@ -113,7 +113,7 @@ define [
 
       return cb() unless conversation?
 
-      url = conversation.url()
+      url = "#{conversation.url()}&include_beta=1"
       @$messageList.show().disableWhileLoading $.ajaxJSON url, 'GET', {}, (data) =>
         @conversations.updateItems [data]
         return unless @conversations.isActive(data.id)
@@ -124,8 +124,10 @@ define [
           @formPane.resetForParticipant(user)
         @resize()
         @$messages.show()
+        @currentConversation = data
         @$messageList.append @buildMessage(message) for message in data.messages
         @$messageList.show()
+        @formPane.form.setAuthor(data.messages, data.participants)
         cb()
 
     resetMessageForm: (conversation) ->
@@ -188,12 +190,22 @@ define [
           $text.show()
           $target.hide()
       $pmAction = $message.find('a.send_private_message')
-      pmUrl = $.replaceTags $pmAction.attr('href'),
-        user_id: data.author_id
-        user_name: encodeURIComponent(userName)
-        from_conversation_id: @conversations.active?().id
-      $pmAction.attr('href', pmUrl).click (e) =>
+      $pmAction.on 'click', (e) =>
+        e.preventDefault()
         e.stopPropagation()
+        user = @userCache[data.author_id]
+        # Click the "New Message" button and after a short delay,
+        # add the clicked user's token to the input.
+        $('#action_compose_message').trigger('click')
+        clearTimeout @addUserTokenCb if @addUserTokenCb
+        @addUserTokenCb = setTimeout =>
+          delete @addUserTokenCb
+          @formPane.form.addToken
+            value: user.id
+            text: user.name
+            data: user
+        ,
+          100
       if data.forwarded_messages?.length
         $ul = $('<ul class="messages"></ul>')
         for submessage in data.forwarded_messages
@@ -302,7 +314,6 @@ define [
 
     closeMenus: () ->
       $('#actions .menus > li, #conversation_actions, #conversations .actions').removeClass('selected')
-      $('#conversations li.menu_active').removeClass('menu_active')
 
     openMenu: ($menu) ->
       @closeMenus()
@@ -343,7 +354,7 @@ define [
         $(document).triggerHandler('document_fragment_change', hash)
 
     initializeHelp: ->
-      $('#help_crumb').click (e) =>
+      $('#conversations-intro-menu-item, #conversations-intro-btn').click (e) =>
         e.preventDefault()
         introSlideshow()
 
@@ -546,34 +557,15 @@ define [
         canToggle: (data) ->
           data.type is 'user' or data.permissions?.send_messages_all
         selector:
-          limiter: (options) =>
-            if options.level > 0 then -1 else 5
           showToggles: true
-          preparer: (postData, data, parent) =>
-            context = postData.context
-            if not postData.search and context and data.length > 1
-              parentData = parent.data('user_data')
-              if context.match(/^(course|section)_\d+$/)
-                # i.e. we are listing synthetic contexts under a course or section
-                data.unshift
-                  id: "#{context}_all"
-                  name: everyoneText
-                  user_count: parentData.user_count
-                  type: 'context'
-                  avatar_url: parentData.avatar_url
-                  permissions: parentData.permissions
-                  selectAll: parentData.permissions.send_messages_all
-              else if context.match(/^((course|section)_\d+_.*|group_\d+)$/) and not context.match(/^course_\d+_(groups|sections)$/) and parentData.permissions.send_messages_all
-                # i.e. we are listing all users in a group or synthetic context
-                data.unshift
-                  id: context
-                  name: selectAllText
-                  user_count: parentData.user_count
-                  type: 'context'
-                  avatar_url: parentData.avatar_url
-                  permissions: parentData.permissions
-                  selectAll: true
-                  noExpand: true # just a magic select-all checkbox, you can't drill into it
+          includeEveryoneOption: (postData, parent) =>
+            # i.e. we are listing synthetic contexts under a course or section
+            if postData.context?.match(/^(course|section)_\d+$/)
+              everyoneText
+          includeSelectAllOption: (postData, parent) =>
+            # i.e. we are listing all users in a group or synthetic context
+            if postData.context?.match(/^((course|section)_\d+_.*|group_\d+)$/) and not postData.context?.match(/^(course|section)_\d+$/) and not postData.context?.match(/^course_\d+_(groups|sections)$/) and parent.data('user_data').permissions.send_messages_all
+              selectAllText
           baseData:
             permissions: ["send_messages_all"]
 
@@ -587,29 +579,14 @@ define [
           $token.prevAll().remove() # only one token at a time
         tokenWrapBuffer: 80
         selector:
-          limiter: (options) =>
-            if options.level > 0 then -1 else 5
-          preparer: (postData, data, parent) =>
-            context = postData.context
-            if not postData.search and context and data.length > 0 and context.match(/^(course|group)_\d+$/)
-              if data.length > 1 and context.match(/^course_/)
-                data.unshift
-                  id: "#{context}_all"
-                  name: everyoneText
-                  user_count: parent.data('user_data').user_count
-                  type: 'context'
-                  avatar_url: parent.data('user_data').avatar_url
-              filterText = if context.match(/^course/)
-                I18n.t('filter_by_course', 'Filter by this course')
-              else
-                I18n.t('filter_by_group', 'Filter by this group')
-              data.unshift
-                id: context
-                name: parent.data('text')
-                type: 'context'
-                avatar_url: parent.data('user_data').avatar_url
-                subText: filterText
-                noExpand: true
+          includeEveryoneOption: (postData, parent) =>
+            if postData.context?.match(/^course_\d+$/)
+              everyoneText
+          includeFilterOption: (postData) =>
+            if postData.context?.match(/^course_\d+$/)
+              I18n.t('filter_by_course', 'Filter by this course')
+            else if postData.context?.match(/^group_\d+$/)
+              I18n.t('filter_by_group', 'Filter by this group')
           baseData:
             synthetic_contexts: 1
             types: ['course', 'user', 'group']

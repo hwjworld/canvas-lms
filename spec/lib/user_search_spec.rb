@@ -1,11 +1,13 @@
-require File.expand_path( '../spec_helper' , File.dirname(__FILE__))
+# encoding: utf-8
+
+require File.expand_path( '../sharding_spec_helper' , File.dirname(__FILE__))
 
 describe UserSearch do
 
-  describe '.for_user_in_course' do
-    let(:search_names) { ['Rose Tyler', 'Martha Jones', 'Rosemary Giver', 'Martha Stewart', 'Tyler Pickett', 'Jon Stewart', 'Stewart Little'] }
+  describe '.for_user_in_context' do
+    let(:search_names) { ['Rose Tyler', 'Martha Jones', 'Rosemary Giver', 'Martha Stewart', 'Tyler Pickett', 'Jon Stewart', 'Stewart Little', 'Ĭńşŧřůćƭǜȑȩ Person'] }
     let(:course) { Course.create! }
-    let(:users) { UserSearch.for_user_in_course('Stewart', course, user).to_a }
+    let(:users) { UserSearch.for_user_in_context('Stewart', course, user).to_a }
     let(:names) { users.map(&:name) }
     let(:user) { User.last }
     let(:student) { User.find_by_name(search_names.last) }
@@ -17,6 +19,8 @@ describe UserSearch do
         student = User.create!(:name => name)
         StudentEnrollment.create!(:user => student, :course => course, :workflow_state => 'active')
       end
+      User.create!(:name => "admin")
+      TeacherEnrollment.create!(:user => user, :course => course, :workflow_state => 'active')
     end
 
     describe 'with complex search enabled' do
@@ -25,6 +29,15 @@ describe UserSearch do
 
       describe 'with gist setting enabled' do
         before { Setting.set('user_search_with_gist', 'true') }
+
+        it "searches case-insensitively" do
+          UserSearch.for_user_in_context("steWArt", course, user).size.should == 3
+        end
+
+        it "uses postgres lower(), not ruby downcase()" do
+          # ruby 1.9 downcase doesn't handle the downcasing of many multi-byte characters correctly
+          UserSearch.for_user_in_context('Ĭńşŧřůćƭǜȑȩ', course, user).size.should == 1
+        end
 
         it 'returns an enumerable' do
           users.size.should == 3
@@ -38,7 +51,7 @@ describe UserSearch do
 
         it 'does not contain users I am not allowed to see' do
           unenrolled_user = User.create!(:name => 'Unenrolled User')
-          search_results = UserSearch.for_user_in_course('Stewart', course, unenrolled_user).map(&:name)
+          search_results = UserSearch.for_user_in_context('Stewart', course, unenrolled_user).map(&:name)
           search_results.should == []
         end
 
@@ -50,14 +63,14 @@ describe UserSearch do
         end
 
         it 'will find teachers' do
-          results = UserSearch.for_user_in_course('Tyler', course, user)
+          results = UserSearch.for_user_in_context('Tyler', course, user)
           results.map(&:name).should include('Tyler Teacher')
         end
 
         describe 'filtering by role' do
           subject { names }
           describe 'to a single role' do
-            let(:users) { UserSearch.for_user_in_course('Tyler', course, user, :enrollment_type => 'student' ).to_a }
+            let(:users) { UserSearch.for_user_in_context('Tyler', course, user, nil, :enrollment_type => 'student' ).to_a }
 
             it { should include('Rose Tyler') }
             it { should include('Tyler Pickett') }
@@ -65,7 +78,7 @@ describe UserSearch do
           end
 
           describe 'to multiple roles' do
-            let(:users) { UserSearch.for_user_in_course('Tyler', course, student, :enrollment_type => ['ta', 'teacher'] ).to_a }
+            let(:users) { UserSearch.for_user_in_context('Tyler', course, student, nil, :enrollment_type => ['ta', 'teacher'] ).to_a }
             before do
               ta = User.create!(:name => 'Tyler TA')
               TaEnrollment.create!(:user => ta, :course => course, :workflow_state => 'active')
@@ -77,14 +90,19 @@ describe UserSearch do
           end
 
           describe 'with the broader role parameter' do
-            let(:users) { UserSearch.for_user_in_course('Tyler', course, student, :enrollment_role => 'ObserverEnrollment' ).to_a }
+
+            let(:users) { UserSearch.for_user_in_context('Tyler', course, student, nil, :enrollment_role => 'ObserverEnrollment' ).to_a }
 
             before do
               ta = User.create!(:name => 'Tyler Observer')
               ObserverEnrollment.create!(:user => ta, :course => course, :workflow_state => 'active')
+              ta2 = User.create!(:name => 'Tyler Observer 2')
+              ObserverEnrollment.create!(:user => ta2, :course => course, :workflow_state => 'active')
+              student.observers << ta2
             end
 
-            it { should include('Tyler Observer') }
+            it { should_not include('Tyler Observer 2') }
+            it { should_not include('Tyler Observer') }
             it { should_not include('Tyler Teacher') }
             it { should_not include('Rose Tyler') }
           end
@@ -100,14 +118,14 @@ describe UserSearch do
           end
 
           it 'will match against an sis id' do
-            UserSearch.for_user_in_course("SOME_SIS", course, user).should == [user]
+            UserSearch.for_user_in_context("SOME_SIS", course, user).should == [user]
           end
 
           it 'can match an SIS id and a user name in the same query' do
             pseudonym.sis_user_id = "MARTHA_SIS_ID"
             pseudonym.save!
             other_user = User.find_by_name('Martha Stewart')
-            results = UserSearch.for_user_in_course("martha", course, user)
+            results = UserSearch.for_user_in_context("martha", course, user)
             results.should include(user)
             results.should include(other_user)
           end
@@ -118,24 +136,35 @@ describe UserSearch do
           before { user.communication_channels.create!(:path => 'the.giver@example.com', :path_type => CommunicationChannel::TYPE_EMAIL) }
 
           it 'matches against an email' do
-            UserSearch.for_user_in_course("the.giver", course, user).should == [user]
+            UserSearch.for_user_in_context("the.giver", course, user).should == [user]
           end
 
           it 'can match an email and a name in the same query' do
-            results = UserSearch.for_user_in_course("giver", course, user)
+            results = UserSearch.for_user_in_context("giver", course, user)
             results.should include(user)
             results.should include(User.find_by_name('Rosemary Giver'))
           end
 
           it 'will not match channels where the type is not email' do
             user.communication_channels.last.update_attributes!(:path_type => CommunicationChannel::TYPE_TWITTER)
-            UserSearch.for_user_in_course("the.giver", course, user).should == []
+            UserSearch.for_user_in_context("the.giver", course, user).should == []
           end
         end
 
         describe 'searching by a DB ID' do
           it 'matches against the database id' do
-            UserSearch.for_user_in_course(user.id, course, user).should == [user]
+            UserSearch.for_user_in_context(user.id, course, user).should == [user]
+          end
+
+          describe "cross-shard users" do
+            specs_require_sharding
+
+            it 'matches against the database id of a cross-shard user' do
+              user = @shard1.activate { user_model }
+              course.enroll_student(user)
+              UserSearch.for_user_in_context(user.global_id, course, user).should == [user]
+              UserSearch.for_user_in_context(user.global_id, course.account, user).should == [user]
+            end
           end
         end
       end
@@ -164,21 +193,17 @@ describe UserSearch do
         pseudonym.sis_user_id = "SOME_SIS_ID"
         pseudonym.unique_id = "SOME_UNIQUE_ID@example.com"
         pseudonym.save!
-        UserSearch.for_user_in_course("SOME_SIS", course, user).should == []
+        UserSearch.for_user_in_context("SOME_SIS", course, user).should == []
       end
 
       it 'does not match against emails' do
         user.communication_channels.create!(:path => 'the.giver@example.com', :path_type => CommunicationChannel::TYPE_EMAIL)
-        UserSearch.for_user_in_course("the.giver", course, user).should == []
+        UserSearch.for_user_in_context("the.giver", course, user).should == []
       end
     end
   end
 
   describe '.like_string_for' do
-    it 'lowercases the term' do
-      UserSearch.like_string_for("MickyMouse").should =~ /mickymouse/
-    end
-
     it 'uses a prefix if gist is not configured' do
       Setting.set('user_search_with_gist', 'false')
       UserSearch.like_string_for("word").should == 'word%'

@@ -21,10 +21,11 @@ define([
   'i18n!assignments',
   'jquery' /* $ */,
   'str/htmlEscape',
+  'compiled/util/vddTooltip',
   'jqueryui/draggable' /* /\.draggable/ */,
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.instructure_date_and_time' /* parseFromISO, dateString, datepicker, time_field, datetime_field, /\$\.datetime/ */,
-  'jquery.instructure_forms' /* formSubmit, fillFormData, getFormData, formSuggestion */,
+  'jquery.instructure_forms' /* formSubmit, fillFormData, getFormData */,
   'jqueryui/dialog',
   'compiled/jquery/fixDialogButtons',
   'jquery.instructure_misc_plugins' /* confirmDelete, showIf */,
@@ -37,7 +38,7 @@ define([
   'jqueryui/datepicker' /* /\.datepicker/ */,
   'jqueryui/droppable' /* /\.droppable/ */,
   'jqueryui/sortable' /* /\.sortable/ */
-], function(INST, I18n, $, htmlEscape) {
+], function(INST, I18n, $, htmlEscape, vddTooltip) {
 
   var defaultShowDateOptions = false;
   function hideAssignmentForm() {
@@ -49,6 +50,7 @@ define([
     $form.find('.ui-datepicker-trigger').show();
     $form.find('.datetime_suggest').text('');
     $form.find('.datetime_field_enabled').show();
+    $form.find('.input-append').show();
     $form.find("").end()
       .hide().appendTo($("body"));
     $assignment.removeClass('editing');
@@ -80,9 +82,17 @@ define([
     var $form = $assignment.find("#add_assignment_form");
     var buttonMsg = "Update";
     var url = $assignment.find(".edit_assignment_link").attr('href');
+    var $submissionTypes = $('[name="assignment[submission_types]"]');
+    var $submissionTypesLabel = $submissionTypes
+      .siblings('label[for="assignment_submission_types"]');
     if($assignment.attr('id') == 'assignment_new') {
+      $submissionTypes.show();
+      $submissionTypesLabel.show();
       buttonMsg = "Add";
       url = $(".add_assignment_link.groupless_link:first").attr('href');
+    } else {
+      $submissionTypesLabel.hide();
+      $submissionTypes.hide();
     }
     $assignment.find(".more_options_link").attr('href', url);
     $form.find("input[type='submit']").val(buttonMsg);
@@ -429,7 +439,7 @@ define([
       var data = $(this).parents("form").getFormData({object_name: 'assignment'});
       var params = {};
       if(data.title) { params['title'] = data.title; }
-      if(data.due_at) { params['due_at'] = data.due_at; }
+      if(data.due_at) { params['due_at'] = $.datetime.process(data.due_at); }
       if (data.points_possible) { params['points_possible'] = data.points_possible; }
       if(data.assignment_group_id) { params['assignment_group_id'] = data.assignment_group_id; }
       if(data.submission_types) { params['submission_types'] = data.submission_types; }
@@ -665,8 +675,9 @@ define([
         }
         $dialog.find("button").attr('disabled', false).filter(".delete_button").text(I18n.t('buttons.delete_group', "Delete Group"));
         $dialog.dialog('close');
-      }, function() {
-        $dialog.find("button").attr('disabled', false).filter(".delete_button").text(I18n.t('errors.deleting_group_failed', "Delete Failed"));
+      }, function(err) {
+        $.flashError(err.errors.workflow_state[0].message);
+        $dialog.find(".delete_button").attr('disabled', false);
       });
     }).delegate('.cancel_button', 'click', function() {
       $("#delete_assignments_dialog").dialog('close');
@@ -823,7 +834,6 @@ define([
         $("#add_assignment_form input[name='assignment[due_date]']").focus().select();
       }
     });
-    $("#add_assignment_form :input").formSuggestion();
     $("#add_assignment_form").formSubmit({
       object_name: 'assignment',
       required: ['title'],
@@ -961,7 +971,7 @@ define([
       event.preventDefault();
       event.stopPropagation();
       if(event.keyString == 'f') {
-        $(this).find(".preview_assignment_link:visible:first").click();
+        window.location = $(this).find(".title:visible:first").attr("href");
       } else if(event.keyString == 'e') {
         $(this).find(".edit_assignment_link:visible:first").click();
       } else if(event.keyString == 'd') {
@@ -1033,4 +1043,5 @@ define([
       $newAssignment.find(":tabbable:first").focus();
     }
   }
+  vddTooltip();
 });

@@ -42,7 +42,7 @@ $(document).ready(function() {
     var view = "email";
     $("#communication_channels").show().dialog({
       title:  I18n.t('titles.register_communication', "Register Communication") ,
-      width: 430,
+      width: 600,
       resizable: false,
       modal: true,
       open: function() {
@@ -68,6 +68,8 @@ $(document).ready(function() {
   });
 
   $("#register_sms_number,#register_email_address").formSubmit({
+    object_name: 'communication_channel',
+    required: ['address'],
     beforeSubmit: function(data) {
       var $list = $(".email_channels");
       var data = $(this).getFormData({object_name: 'communication_channel'});
@@ -180,7 +182,7 @@ $(document).ready(function() {
         title: confirm_title,
         width: 350,
         open: function() {
-          $(this).find(":text:first").focus().select();
+          $(this).closest('.ui-dialog').focus()
         }
       });
     }

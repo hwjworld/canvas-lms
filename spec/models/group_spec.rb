@@ -138,7 +138,7 @@ describe Group do
       }.each do |join_level, workflow_state|
         group = group_model(:join_level => join_level, :group_category => @communities)
         group.add_user(@user)
-        group.group_memberships.scoped(:conditions => { :workflow_state => workflow_state, :user_id => @user.id }).first.should_not be_nil
+        group.group_memberships.where(:workflow_state => workflow_state, :user_id => @user).first.should_not be_nil
       end
     end
 
@@ -150,7 +150,7 @@ describe Group do
 
       [ 'invited', 'requested', 'accepted' ].each do |workflow_state|
         @group.add_user(@user, workflow_state)
-        @group.group_memberships.scoped(:conditions => { :workflow_state => workflow_state, :user_id => @user.id }).first.should_not be_nil
+        @group.group_memberships.where(:workflow_state => workflow_state, :user_id => @user).first.should_not be_nil
       end
     end
 
@@ -312,6 +312,25 @@ describe Group do
     end
   end
 
+  context "#full?" do
+    it "returns true when category group_limit has been met" do
+      @group.group_category = @course.group_categories.build(:name => 'foo')
+      @group.group_category.group_limit = 1
+      @group.add_user user_model, 'accepted'
+      @group.should be_full
+    end
+
+    it "returns false when category group_limit has not been met" do
+      # no category
+      @group.should_not be_full
+      # not full
+      @group.group_category = @course.group_categories.build(:name => 'foo')
+      @group.group_category.group_limit = 2
+      @group.add_user user_model, 'accepted'
+      @group.should_not be_full
+    end
+  end
+
   context "has_member?" do
     it "should be true for accepted memberships, regardless of moderator flag" do
       @user1 = user_model
@@ -325,7 +344,7 @@ describe Group do
       @group.add_user(@user3, 'invited')
       @group.add_user(@user4, 'requested')
       @group.add_user(@user5, 'rejected')
-      GroupMembership.update_all({:moderator => true}, {:group_id => @group.id, :user_id => @user2.id})
+      GroupMembership.where(:group_id => @group, :user_id => @user2).update_all(:moderator => true)
 
       @group.has_member?(@user1).should be_true
       @group.has_member?(@user2).should be_true
@@ -348,7 +367,7 @@ describe Group do
       @group.add_user(@user3, 'invited')
       @group.add_user(@user4, 'requested')
       @group.add_user(@user5, 'rejected')
-      GroupMembership.update_all({:moderator => true}, {:group_id => @group.id, :user_id => [@user2.id, @user3.id, @user4.id, @user5.id]})
+      GroupMembership.where(:group_id => @group, :user_id => [@user2, @user3, @user4, @user5]).update_all(:moderator => true)
 
       @group.has_moderator?(@user1).should be_false
       @group.has_moderator?(@user2).should be_true
@@ -411,9 +430,10 @@ describe Group do
   end
 
   it "as_json should include group_category" do
-    group_category = GroupCategory.create(:name => "Something")
-    group = Group.create(:group_category => group_category)
-    hash = ActiveSupport::JSON.decode(group.to_json)
+    course()
+    gc = group_category(name: "Something")
+    group = Group.create(:group_category => gc)
+    hash = group.as_json
     hash["group"]["group_category"].should == "Something"
   end
 
@@ -532,5 +552,47 @@ describe Group do
       @group.tabs_available(nil).map{|t|t[:id]}.should_not include Group::TAB_CONFERENCES
     end
   end
-  
+
+  describe "quota" do
+    it "should default to Group.default_storage_quota" do
+      @group.quota.should == Group.default_storage_quota
+    end
+
+    it "should be overridden by the account's default_group_storage_quota" do
+      a = @group.account
+      a.default_group_storage_quota = 10.megabytes
+      a.save!
+
+      @group.reload
+      @group.quota.should == 10.megabytes
+    end
+  end
+
+  describe "#feature_enabled?" do
+    before(:each) do
+      course_with_teacher(active_all: true)
+      @course.root_account.allow_feature!(:draft_state)
+    end
+
+    context "a course with :draft_state enabled" do
+      it "should pass its setting on to its groups" do
+        @course.enable_feature!(:draft_state)
+        group(group_context: @course).should be_feature_enabled(:draft_state)
+      end
+    end
+
+    context "an account with :draft_state enabled" do
+      before do
+        @course.root_account.enable_feature!(:draft_state)
+      end
+
+      it "should pass its setting on to course groups" do
+        group(group_context: @course).should be_feature_enabled(:draft_state)
+      end
+
+      it "should pass its setting on to account groups" do
+        group(group_context: @course.root_account).should be_feature_enabled(:draft_state)
+      end
+    end
+  end
 end

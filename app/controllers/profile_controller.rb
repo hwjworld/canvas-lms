@@ -78,7 +78,8 @@ class ProfileController < ApplicationController
   #     'sis_login_id': 'sis1-login',
   #     // The avatar_url can change over time, so we recommend not caching it for more than a few hours
   #     'avatar_url': '..url..',
-  #     'calendar': { 'ics' => '..url..' }
+  #     'calendar': { 'ics' => '..url..' },
+  #     'time_zone': 'America/Denver'
   #   }
   def settings
     if api_request?
@@ -148,7 +149,7 @@ class ProfileController < ApplicationController
   #
   # @example_request
   #
-  #   curl 'http://<canvas>/api/v1/users/1/avatars.json' \ 
+  #   curl 'https://<canvas>/api/v1/users/1/avatars.json' \
   #        -H "Authorization: Bearer <token>"
   #
   # @example_response
@@ -187,6 +188,10 @@ class ProfileController < ApplicationController
   def update
     @user = @current_user
 
+    if params[:user] && params[:user][:enabled_theme]
+      @user.enabled_theme = params[:user].delete(:enabled_theme)
+    end
+
     if params[:privacy_notice].present?
       @user.preferences[:read_notification_privacy_info] = Time.now.utc.to_s
       @user.save
@@ -209,13 +214,16 @@ class ProfileController < ApplicationController
         if params[:pseudonym]
           change_password = params[:pseudonym].delete :change_password
           old_password = params[:pseudonym].delete :old_password
-          pseudonym_to_update = @user.pseudonyms.find(params[:pseudonym][:password_id]) if params[:pseudonym][:password_id] && change_password
+          if params[:pseudonym][:password_id] && change_password
+            pseudonym_to_update = @user.pseudonyms.find(params[:pseudonym][:password_id])
+            pseudonym_to_update.require_password = true if pseudonym_to_update
+          end
           if change_password == '1' && pseudonym_to_update && !pseudonym_to_update.valid_arbitrary_credentials?(old_password)
             error_msg = t('errors.invalid_old_passowrd', "Invalid old password for the login %{pseudonym}", :pseudonym => pseudonym_to_update.unique_id)
             pseudonymed = true
             flash[:error] = error_msg
             format.html { redirect_to user_profile_url(@current_user) }
-            format.json { render :json => {:errors => {:old_password => error_msg}}.to_json, :status => :bad_request }
+            format.json { render :json => {:errors => {:old_password => error_msg}}, :status => :bad_request }
           end
           if change_password != '1' || !pseudonym_to_update || !pseudonym_to_update.valid_arbitrary_credentials?(old_password)
             params[:pseudonym].delete :password
@@ -226,17 +234,17 @@ class ProfileController < ApplicationController
             pseudonymed = true
             flash[:error] = t('errors.profile_update_failed', "Login failed to update")
             format.html { redirect_to user_profile_url(@current_user) }
-            format.json { render :json => pseudonym_to_update.errors.to_json, :status => :bad_request }
+            format.json { render :json => pseudonym_to_update.errors, :status => :bad_request }
           end
         end
         unless pseudonymed
           flash[:notice] = t('notices.updated_profile', "Settings successfully updated")
           format.html { redirect_to user_profile_url(@current_user) }
-          format.json { render :json => @user.to_json(:methods => :avatar_url, :include => {:communication_channel => {:only => [:id, :path]}, :pseudonym => {:only => [:id, :unique_id]} }) }
+          format.json { render :json => @user.as_json(:methods => :avatar_url, :include => {:communication_channel => {:only => [:id, :path]}, :pseudonym => {:only => [:id, :unique_id]} }) }
         end
       else
         format.html
-        format.json { render :json => @user.errors.to_json }
+        format.json { render :json => @user.errors }
       end
     end
   end
@@ -271,8 +279,8 @@ class ProfileController < ApplicationController
         visible, invisible = params[:user_services].partition { |service,bool|
           value_to_boolean(bool)
         }
-        @user.user_services.update_all("visible = TRUE", :service => visible.map(&:first))
-        @user.user_services.update_all("visible = FALSE", :service => invisible.map(&:first))
+        @user.user_services.where(:service => visible.map(&:first)).update_all(:visible => true)
+        @user.user_services.where(:service => invisible.map(&:first)).update_all(:visible => false)
       end
 
       respond_to do |format|
@@ -282,7 +290,7 @@ class ProfileController < ApplicationController
     else
       respond_to do |format|
         format.html { redirect_to user_profile_path(@user) } # FIXME: need to go to edit path
-        format.json { render :json => 'TODO' }
+        format.json { render :json => @profile.errors, :status => :bad_request }  #NOTE: won't send back @user validation errors (i.e. short_name)
       end
     end
   end

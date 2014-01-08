@@ -20,14 +20,10 @@ require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
 describe GroupsController do
 
-  #Delete these examples and add some real ones
-  it "should use GroupsController" do
-    controller.should be_an_instance_of(GroupsController)
-  end
-
   describe "GET context_index" do
     it "should require authorization" do
-      course_with_student
+      course(:active_all => true)
+      user_session(user) # logged in user without course access
       category1 = @course.group_categories.create(:name => "category 1")
       category2 = @course.group_categories.create(:name => "category 2")
       g1 = @course.groups.create(:name => "some group", :group_category => category1)
@@ -54,25 +50,6 @@ describe GroupsController do
   end
 
   describe "GET index" do
-    it "should assign variables" do
-      get 'index'
-      assigns[:groups].should_not be_nil
-    end
-
-    describe 'empty' do
-      it "should assign an empty list for non-json when empty" do
-        get 'index', :format => 'json'
-        response.should be_success
-        assigns[:groups].should == []
-      end
-
-      it "should return an empty list for json when empty" do
-        get 'index', :format => 'json'
-        response.should be_success
-        response.body.should == "[]"
-      end
-    end
-
     describe 'pagination' do
       before do
         course_with_student_logged_in(:active_all => 1)
@@ -82,13 +59,13 @@ describe GroupsController do
 
       it "should not paginate non-json" do
         get 'index', :per_page => 1
-        assigns[:groups].should == @student.current_groups
+        assigns[:groups].should == @student.current_groups.by_name
         response.headers['Link'].should be_nil
       end
 
       it "should paginate json" do
         get 'index', :format => 'json', :per_page => 1
-        assigns[:groups].should == [@student.current_groups.order(:id).first]
+        assigns[:groups].should == [@student.current_groups.by_name.first]
         response.headers['Link'].should_not be_nil
       end
     end
@@ -96,14 +73,14 @@ describe GroupsController do
 
   describe "GET show" do
     it "should require authorization" do
-      @group = Group.create!(:name => "some group")
+      @group = Account.default.groups.create!(:name => "some group")
       get 'show', :id => @group.id
       assigns[:group].should eql(@group)
       assert_unauthorized
     end
 
     it "should assign variables" do
-      @group = Group.create!(:name => "some group")
+      @group = Account.default.groups.create!(:name => "some group")
       @user = user_model
       user_session(@user)
       @group.add_user(@user)
@@ -164,7 +141,7 @@ describe GroupsController do
   describe "GET new" do
     it "should require authorization" do
       @course = course_model(:reusable => true)
-      @group = @course.groups.create(:name => "some group")
+      @group = @course.groups.create!(:name => "some group")
       get 'new', :course_id => @course.id
       assert_unauthorized
     end
@@ -172,7 +149,7 @@ describe GroupsController do
 
   describe "POST add_user" do
     it "should require authorization" do
-      @group = Group.create(:name => "some group")
+      @group = Account.default.groups.create!(:name => "some group")
       post 'add_user', :group_id => @group.id
       assert_unauthorized
     end
@@ -209,7 +186,7 @@ describe GroupsController do
 
   describe "DELETE remove_user" do
     it "should require authorization" do
-      @group = Group.create(:name => "some group")
+      @group = Account.default.groups.create!(:name => "some group")
       @user = user(:active_all => true)
       @group.add_user(@user)
       delete 'remove_user', :group_id => @group.id, :user_id => @user.id
@@ -266,6 +243,36 @@ describe GroupsController do
       post 'create', :course_id => @course.id, :group => {:name => "some group", :group_category_id => 11235}
       response.should_not be_success
     end
+    
+    describe "quota" do
+      before do
+        course :active_all => true
+        Setting.set('group_default_quota', 11.megabytes)
+      end
+      
+      context "teacher" do
+        before do
+          course_with_teacher_logged_in :course => @course, :active_all => true
+        end
+        
+        it "should ignore the storage_quota_mb parameter" do
+          post 'create', :course_id => @course.id, :group => {:name => "a group", :storage_quota_mb => 22}
+          assigns[:group].storage_quota_mb.should == 11
+        end
+      end
+      
+      context "account admin" do
+        before do
+          account_admin_user
+          user_session(@admin)
+        end
+        
+        it "should set the storage_quota_mb parameter" do
+          post 'create', :course_id => @course.id, :group => {:name => "a group", :storage_quota_mb => 22}
+          assigns[:group].storage_quota_mb.should == 22
+        end
+      end
+    end
   end
 
   describe "PUT update" do
@@ -302,8 +309,44 @@ describe GroupsController do
       put 'update', :course_id => @course.id, :id => @group.id, :group => {:group_category_id => 11235}
       response.should_not be_success
     end
+    
+    describe "quota" do
+      before do
+        course :active_all => true
+        @group = @course.groups.build(:name => "teh gruop")
+        @group.storage_quota_mb = 11
+        @group.save!
+      end
+      
+      context "teacher" do
+        before do
+          course_with_teacher_logged_in :course => @course, :active_all => true
+        end
+        
+        it "should ignore the quota parameter" do
+          put 'update', :course_id => @course.id, :id => @group.id, :group => {:name => 'the group', :storage_quota_mb => 22}
+          @group.reload
+          @group.name.should == 'the group'
+          @group.storage_quota_mb.should == 11
+        end
+      end
+      
+      context "account admin" do
+        before do
+          account_admin_user
+          user_session(@admin)
+        end
+        
+        it "should update group quota" do
+          put 'update', :course_id => @course.id, :id => @group.id, :group => {:name => 'the group', :storage_quota_mb => 22}
+          @group.reload
+          @group.name.should == 'the group'
+          @group.storage_quota_mb.should == 22
+        end
+      end
+    end
   end
-
+  
   describe "DELETE destroy" do
     it "should require authorization" do
       course_with_teacher(:active_all => true)
@@ -433,135 +476,6 @@ describe GroupsController do
     end
   end
 
-  context "POST 'assign_unassigned_members'" do
-    it "should require :manage_groups permission" do
-      course_with_teacher(:active_all => true)
-      student = @course.enroll_student(user_model).user
-      category = @course.group_categories.create(:name => "Group Category")
-
-      user_session(student)
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.status.should == '401 Unauthorized'
-    end
-
-    it "should require valid group :category_id" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.create(:name => "Group Category")
-
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id + 1
-      response.status.should == '404 Not Found'
-    end
-
-    it "should fail for student organized groups" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = GroupCategory.student_organized_for(@course)
-
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.status.should == '400 Bad Request'
-    end
-
-    it "should fail for restricted self signup groups" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.build(:name => "Group Category")
-      category.configure_self_signup(true, true)
-      category.save
-
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.status.should == '400 Bad Request'
-
-      category.configure_self_signup(true, false)
-      category.save
-
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.should be_success
-    end
-
-    it "should not assign users to inactive groups" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.create(:name => "Group Category")
-      group1 = category.groups.create(:name => "Group 1", :context => @course)
-      group2 = category.groups.create(:name => "Group 2", :context => @course)
-      student1 = @course.enroll_student(user_model).user
-      student2 = @course.enroll_student(user_model).user
-      group2.add_user(student1)
-      group1.destroy
-
-      # group1 now has fewer students, and would be favored if it weren't
-      # destroyed. make sure the unassigned student (student2) is assigned to
-      # group2 instead of group1
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.should be_success
-      data = json_parse
-      data.size.should == 1
-      data.first['id'].should == group2.id
-    end
-
-    it "should not assign users already in group in the category" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.create(:name => "Group Category")
-      group1 = category.groups.create(:name => "Group 1", :context => @course)
-      group2 = category.groups.create(:name => "Group 2", :context => @course)
-      student1 = @course.enroll_student(user_model).user
-      student2 = @course.enroll_student(user_model).user
-      group2.add_user(student1)
-
-      # student1 shouldn't get assigned, already being in a group
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.should be_success
-      data = json_parse
-      data.map{ |g| g['new_members'] }.flatten.map{ |u| u['user_id'] }.should_not be_include(student1.id)
-    end
-
-    it "should otherwise assign ungrouped users to groups in the category" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.create(:name => "Group Category")
-      group1 = category.groups.create(:name => "Group 1", :context => @course)
-      group2 = category.groups.create(:name => "Group 2", :context => @course)
-      student1 = @course.enroll_student(user_model).user
-      student2 = @course.enroll_student(user_model).user
-      group2.add_user(student1)
-
-      # student2 should get assigned, not being in a group
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.should be_success
-      data = json_parse
-      data.map{ |g| g['new_members'] }.flatten.map{ |u| u['user_id'] }.should be_include(student2.id)
-    end
-
-    it "should prefer groups with fewer users" do
-      course_with_teacher_logged_in(:active_all => true)
-      category = @course.group_categories.create(:name => "Group Category")
-      group1 = category.groups.create(:name => "Group 1", :context => @course)
-      group2 = category.groups.create(:name => "Group 2", :context => @course)
-      student1 = @course.enroll_student(user_model).user
-      student2 = @course.enroll_student(user_model).user
-      student3 = @course.enroll_student(user_model).user
-      student4 = @course.enroll_student(user_model).user
-      student5 = @course.enroll_student(user_model).user
-      student6 = @course.enroll_student(user_model).user
-      group1.add_user(student1)
-      group1.add_user(student2)
-
-      # group2 should get three unassigned students while group1 gets one, to
-      # bring them both to three
-      post 'assign_unassigned_members', :course_id => @course.id, :category_id => category.id
-      response.should be_success
-      data = json_parse
-      data.size.should == 2
-      data.map{ |g| g['id'] }.sort.should == [group1.id, group2.id].sort
-
-      student_ids = [student3.id, student4.id, student5.id, student6.id]
-
-      group1_assignments = data.find{ |g| g['id'] == group1.id }['new_members']
-      group1_assignments.size.should == 1
-      student_ids.delete(group1_assignments.first['user_id']).should_not be_nil
-
-      group2_assignments = data.find{ |g| g['id'] == group2.id }['new_members']
-      group2_assignments.size.should == 3
-      group2_assignments.map{ |u| u['user_id'] }.sort.should == student_ids.sort
-    end
-  end
-
   describe "GET 'public_feed.atom'" do
     before(:each) do
       group_with_user(:active_all => true)
@@ -603,14 +517,14 @@ describe GroupsController do
       get 'accept_invitation', :group_id => @group.id, :uuid => @membership.uuid
       @group.reload
       @group.has_member?(@user).should be_true
-      @group.group_memberships.scoped(:conditions => {:workflow_state => "invited"}).count.should == 0
+      @group.group_memberships.where(:workflow_state => "invited").count.should == 0
     end
 
     it "should reject an invalid invitation uuid" do
       get 'accept_invitation', :group_id => @group.id, :uuid => @membership.uuid + "x"
       @group.reload
       @group.has_member?(@user).should be_false
-      @group.group_memberships.scoped(:conditions => {:workflow_state => "invited"}).count.should == 1
+      @group.group_memberships.where(:workflow_state => "invited").count.should == 1
     end
   end
 end

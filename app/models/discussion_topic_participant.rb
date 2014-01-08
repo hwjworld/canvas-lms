@@ -20,12 +20,14 @@ class DiscussionTopicParticipant < ActiveRecord::Base
   include Workflow
 
   # Be more restrictive if this is ever updatable from user params
-  attr_accessible :discussion_topic, :user, :workflow_state, :unread_entry_count
+  attr_accessible :discussion_topic, :user, :workflow_state, :unread_entry_count, :subscribed
 
   belongs_to :discussion_topic
   belongs_to :user
 
   before_save :check_unread_count
+
+  validates_presence_of :discussion_topic_id, :user_id, :workflow_state, :unread_entry_count
 
   # keeps track of the read state for the initial discussion topic text
   workflow do

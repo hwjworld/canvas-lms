@@ -29,11 +29,12 @@ describe ContextModule do
       course_with_teacher_logged_in(:active_all => true)
       context_module = @course.context_modules.create!
       content_tag = context_module.add_item :type => 'context_module_sub_header', :title => "My Sub Header Title"
-      ContextModule.update_all({ :updated_at => 1.hour.ago }, { :id => context_module.id })
+      ContextModule.where(:id => context_module).update_all(:updated_at => 1.hour.ago)
       get "/courses/#{@course.id}/modules"
       response.body.should match(/My Sub Header Title/)
 
       content_tag.update_attributes(:title => "My New Title")
+
       get "/courses/#{@course.id}/modules"
       response.body.should match(/My New Title/)
     end
@@ -96,23 +97,28 @@ describe ContextModule do
         course_with_student_logged_in(:active_all => true)
         @quiz = @course.quizzes.create!(:title => "new quiz", :shuffle_answers => true)
     
-        @mod1 = @course.context_modules.create!(:name => "some module")
-        @mod1.require_sequential_progress = true
-        @mod1.save!
-        @tag1 = @mod1.add_item(:type => 'quiz', :id => @quiz.id)
-        @mod1.completion_requirements = {@tag1.id => {:type => 'min_score', :min_score => 1}}
-        @mod1.save!
-    
-        @mod2 = @course.context_modules.create!(:name => "dependant module")
-        @mod2.prerequisites = "module_#{@mod1.id}"
-        @mod2.save!
-        
+        # separate timestamps so touch_context will actually invalidate caches
+        Timecop.freeze(4.seconds.ago) do
+          @mod1 = @course.context_modules.create!(:name => "some module")
+          @mod1.require_sequential_progress = true
+          @mod1.save!
+          @tag1 = @mod1.add_item(:type => 'quiz', :id => @quiz.id)
+          @mod1.completion_requirements = {@tag1.id => {:type => 'min_score', :min_score => 1}}
+          @mod1.save!
+        end
+
+        Timecop.freeze(2.second.ago) do
+          @mod2 = @course.context_modules.create!(:name => "dependant module")
+          @mod2.prerequisites = "module_#{@mod1.id}"
+          @mod2.save!
+        end
+
         yield '<div id="test_content">yay!</div>'
         
         get @test_url
         response.should be_success
         html = Nokogiri::HTML(response.body)
-        html.css('#test_content').length.should == 0
+        html.css('#test_content').length.should == (@test_content_length || 0)
     
         p1 = @mod1.evaluate_for(@user, true, true)
     
@@ -161,6 +167,7 @@ describe ContextModule do
           discussion = @course.discussion_topics.create!(:title => "topic", :message => content)
           @test_url = "/courses/#{@course.id}/discussion_topics/#{discussion.id}"
           @tag2 = @mod2.add_item(:type => 'discussion_topic', :id => discussion.id)
+          @test_content_length = 1
         end
       end
     end

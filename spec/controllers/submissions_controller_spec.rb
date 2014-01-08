@@ -67,8 +67,7 @@ describe SubmissionsController do
     it "should allow attaching multiple files to the submission" do
       course_with_student_logged_in(:active_all => true)
       @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_url,online_upload")
-      require 'action_controller'
-      require 'action_controller/test_process.rb'
+      require 'action_controller_test_process'
       data1 = ActionController::TestUploadedFile.new(File.join(File.dirname(__FILE__), "/../fixtures/scribd_docs/doc.doc"), "application/msword", true)
       data2 = ActionController::TestUploadedFile.new(File.join(File.dirname(__FILE__), "/../fixtures/scribd_docs/xls.xls"), "application/vnd.ms-excel", true)
       post 'create', :course_id => @course.id, :assignment_id => @assignment.id, :submission => {:submission_type => "online_upload"}, :attachments => {"0" => {:uploaded_data => data1}, "1" => {:uploaded_data => data2}}
@@ -153,7 +152,7 @@ describe SubmissionsController do
         student_in_course(:course => @course)
         @u2 = @user
         @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_text_entry", :group_category => GroupCategory.create!(:name => "groups", :context => @course), :grade_group_students_individually => true)
-        @group = @assignment.group_category.groups.create!(:name => 'g1')
+        @group = @assignment.group_category.groups.create!(:name => 'g1', :context => @course)
         @group.users << @u1
         @group.users << @user
       end
@@ -170,6 +169,30 @@ describe SubmissionsController do
         subs = @assignment.submissions
         subs.size.should == 2
         subs.all.sum{ |s| s.submission_comments.size }.should eql 2
+      end
+    end
+
+    context "google doc" do
+      before(:each) do
+        course_with_student_logged_in(active_all: true)
+        @student.stubs(:gmail).returns('student@does-not-match.com')
+        @assignment = @course.assignments.create!(title: 'some assignment', submission_types: 'online_upload')
+        account = Account.default
+        flag    = FeatureFlag.new
+        account.settings[:google_docs_domain] = 'example.com'
+        account.save!
+        flag.context = account
+        flag.feature = 'google_docs_domain_restriction'
+        flag.state = 'on'
+        flag.save!
+      end
+
+      it "should not save if domain restriction prevents it" do
+        SubmissionsController.any_instance.stubs(:google_docs_download).returns([Net::HTTPOK.new(200, {}, ''), 'title', 'pdf'])
+        post(:create, course_id: @course.id, assignment_id: @assignment.id,
+             submission: { submission_type: 'google_doc' },
+             google_doc: { document_id: '12345' })
+        response.should be_redirect
       end
     end
   end
@@ -240,7 +263,7 @@ describe SubmissionsController do
       student_in_course(:course => @course)
       @u2 = @user
       @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "discussion_topic", :group_category => GroupCategory.create!(:name => "groups", :context => @course), :grade_group_students_individually => true)
-      @group = @assignment.group_category.groups.create!(:name => 'g1')
+      @group = @assignment.group_category.groups.create!(:name => 'g1', :context => @course)
       @group.users << @u1
       @group.users << @user
       put 'update', :course_id => @course.id, :assignment_id => @assignment.id, :id => @u1.id, :submission => {:comment => "some comment", :group_comment => '1'}
@@ -256,8 +279,7 @@ describe SubmissionsController do
       course_with_student_logged_in(:active_all => true)
       @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_url,online_upload")
       @submission = @assignment.submit_homework(@user)
-      require 'action_controller'
-      require 'action_controller/test_process.rb'
+      require 'action_controller_test_process'
       data1 = ActionController::TestUploadedFile.new(File.join(File.dirname(__FILE__), "/../fixtures/scribd_docs/doc.doc"), "application/msword", true)
       data2 = ActionController::TestUploadedFile.new(File.join(File.dirname(__FILE__), "/../fixtures/scribd_docs/xls.xls"), "application/vnd.ms-excel", true)
       put 'update', :course_id => @course.id, :assignment_id => @assignment.id, :id => @user.id, :submission => {:comment => "some comment"}, :attachments => {"0" => {:uploaded_data => data1}, "1" => {:uploaded_data => data2}}
@@ -268,6 +290,36 @@ describe SubmissionsController do
       assigns[:submission].submission_comments[0].attachments.length.should eql(2)
       assigns[:submission].submission_comments[0].attachments.map{|a| a.display_name}.should be_include("doc.doc")
       assigns[:submission].submission_comments[0].attachments.map{|a| a.display_name}.should be_include("xls.xls")
+    end
+
+    it "should allow setting 'student_entered_grade'" do
+      course_with_student_logged_in(:active_all => true)
+      @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_url,online_upload")
+      @submission = @assignment.submit_homework(@user)
+      put 'update', {
+        :course_id => @course.id,
+        :assignment_id => @assignment.id,
+        :id => @user.id,
+        :submission => {
+          :student_entered_score => '2'
+        }
+      }
+      @submission.reload.student_entered_score.should == 2.0
+    end
+
+    it "should round 'student_entered_grade'" do
+      course_with_student_logged_in(:active_all => true)
+      @assignment = @course.assignments.create!(:title => "some assignment", :submission_types => "online_url,online_upload")
+      @submission = @assignment.submit_homework(@user)
+      put 'update', {
+        :course_id => @course.id,
+        :assignment_id => @assignment.id,
+        :id => @user.id,
+        :submission => {
+          :student_entered_score => '2.0000000020'
+        }
+      }
+      @submission.reload.student_entered_score.should == 2.0
     end
   end
 

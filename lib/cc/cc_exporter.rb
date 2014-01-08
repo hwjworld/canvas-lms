@@ -98,8 +98,8 @@ module CC
       @content_export ? @content_export.id : nil
     end
 
-    def export_object?(obj)
-      @content_export ? @content_export.export_object?(obj) : true
+    def export_object?(obj, asset_type=nil)
+      @content_export ? @content_export.export_object?(obj, asset_type) : true
     end
 
     def export_symbol?(obj)
@@ -144,7 +144,7 @@ module CC
       end
       FileUtils::mkdir_p File.join(@export_dir, ZIP_DIR)
       @zip_path = File.join(@export_dir, ZIP_DIR, @zip_name)
-      @zip_file = Zip::ZipFile.new(@zip_path, Zip::ZipFile::CREATE)
+      @zip_file = Zip::File.new(@zip_path, Zip::File::CREATE)
     end
 
   end

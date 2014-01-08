@@ -20,7 +20,7 @@ require 'bigdecimal'
 
 class QuizQuestion::NumericalQuestion < QuizQuestion::Base
   def answers
-    @question_data[:answers].sort_by{|a| a[:weight] || 0}
+    @question_data[:answers].sort_by{|a| a[:weight] || SortFirst}
   end
 
   def correct_answer_parts(user_answer)
@@ -35,6 +35,12 @@ class QuizQuestion::NumericalQuestion < QuizQuestion::Base
     match = answers.find do |answer|
       if answer[:numerical_answer_type] == "exact_answer"
         val = BigDecimal.new(answer[:exact].to_s)
+
+        # calculate margin value using percentage
+        if answer[:margin].to_s.ends_with?("%")
+          answer[:margin] = (answer[:margin].to_f / 100.0 * val).abs
+        end
+
         margin = BigDecimal.new(answer[:margin].to_s)
         min = val - margin
         max = val + margin
@@ -49,5 +55,19 @@ class QuizQuestion::NumericalQuestion < QuizQuestion::Base
     end
 
     !!match
+  end
+
+  def stats(responses)
+    super
+
+    @question_data.answers.each do |answer|
+      if answer[:numerical_answer_type] == 'exact_answer'
+        answer[:text] = I18n.t('statistics.exact_answer', "%{exact_value} +/- %{margin}", :exact_value => answer[:exact], :margin => answer[:margin])
+      else
+        answer[:text] = I18n.t('statistics.inexact_answer', "%{lower_bound} to %{upper_bound}", :lower_bound => answer[:start], :upper_bound => answer[:end])
+      end
+    end
+
+    @question_data
   end
 end

@@ -25,9 +25,9 @@ describe "account" do
       ldap_form.find_element(:id, 'account_authorization_config_0_auth_password').send_keys('primary password')
       ldap_form.find_element(:id, 'account_authorization_config_0_login_handle_name').send_keys('login handle')
       ldap_form.find_element(:id, 'account_authorization_config_0_change_password_url').send_keys('http://forgot.password.example.com/')
-      expect_new_page_load { submit_form(ldap_form) }
+      submit_form('#auth_form')
 
-      Account.default.account_authorization_configs.length.should == 1
+      keep_trying_until { Account.default.account_authorization_configs.length.should == 1 }
       config = Account.default.account_authorization_configs.first
       config.auth_host.should == 'primary.host.example.com'
       config.auth_port.should == 1
@@ -50,10 +50,9 @@ describe "account" do
       ldap_form.find_element(:id, 'account_authorization_config_1_auth_filter').send_keys('secondary filter')
       ldap_form.find_element(:id, 'account_authorization_config_1_auth_username').send_keys('secondary username')
       ldap_form.find_element(:id, 'account_authorization_config_1_auth_password').send_keys('secondary password')
+      submit_form('#auth_form')
 
-      expect_new_page_load { submit_form(ldap_form) }
-
-      Account.default.account_authorization_configs.length.should == 2
+      keep_trying_until { Account.default.account_authorization_configs.length.should == 2 }
       config = Account.default.account_authorization_configs.first
       config.auth_host.should == 'primary.host.example.com'
       config.auth_over_tls.should == 'simple_tls'
@@ -77,9 +76,9 @@ describe "account" do
       f('.edit_auth_link').click
       ldap_form = f('form.ldap_form')
       ldap_form.find_element(:css, '.remove_secondary_ldap_link').click
-      expect_new_page_load { submit_form(ldap_form) }
+      submit_form('#auth_form')
 
-      Account.default.account_authorization_configs.length.should == 1
+      keep_trying_until { Account.default.account_authorization_configs.length.should == 1 }
 
       # test removing the entire config
       expect_new_page_load do
@@ -118,7 +117,7 @@ describe "account" do
       get "/accounts/#{Account.default.id}/users"
       f(".add_user_link").click
       dialog = f("#add_user_dialog")
-      dialog.find_element(:css, 'label[for="pseudonym_unique_id"]').text.should == "CAS Username:"
+      dialog.find_element(:css, 'label[for="pseudonym_unique_id"]').text.should == "CAS Username:*"
     end
 
     it "should be able to create a new course" do
@@ -134,7 +133,7 @@ describe "account" do
     end
 
     it "should be able to create a new course when no other courses exist" do
-      Account.default.courses.each { |c| c.destroy! }
+      Account.default.courses.each { |c| c.enrollments.scoped.delete_all; c.destroy! }
 
       get "/accounts/#{Account.default.to_param}"
       f('.add_course_link').click
@@ -336,6 +335,20 @@ describe "account" do
       find_user_form = f('#new_user')
       submit_input(find_user_form, '#user_name', 'this student name will not exist', false)
       f('#content').should include_text(@error_text)
+    end
+  end
+
+  describe "user details view" do
+    def create_sub_account(name = 'sub_account', parent_account = Account.default)
+      Account.create(:name => name, :parent_account => parent_account)
+    end
+
+    it "should be able to view user details from parent account" do
+      user_non_root = user
+      create_sub_account.add_user(user_non_root)
+      get "/accounts/#{Account.default.id}/users/#{user_non_root.id}"
+      #verify user details displayed properly
+      f('.accounts .unstyled_list li').should include_text('sub_account')
     end
   end
 end

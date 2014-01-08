@@ -1,5 +1,5 @@
 <div id="add_assignment" style="display: none;">
-  <% form_for :assignment,
+  <%= form_for :assignment,
               :url => context_url(@context, :controller => :assignments, :action => :create),
               :html => { :style => 'display: none;',
                          :id    => 'add_assignment_form',
@@ -12,7 +12,7 @@
       <div class="row-fluid">
         <div class="span6">
           <%= f.text_field :title,
-                           :maxlength => '255',
+                           :maxlength => '254',
                            :class    => 'span10',
                            'aria-label' => t(:assignment_name, 'Assignment Name')
           %>

@@ -2,7 +2,7 @@
 
 <% content_for :right_side do %>
   <div class="rs-margin-lr rs-margin-top">
-    <a href="<%= message_user_path(@user) %>" class="btn button-sidebar-wide"><i class="icon-email"></i> <%= t 'links.message_user', "Message %{user}", :user => context_user_name(@context, @user) %></a>
+    <a href="<%= message_user_path(@user, @context) %>" class="btn button-sidebar-wide"><i class="icon-email"></i> <%= t 'links.message_user', "Message %{user}", :user => context_user_name(@context, @user) %></a>
     <% if @domain_root_account.try_rescue(:enable_user_notes) and can_do(@user, @current_user, :read_user_notes) %>
     <a href="<%= user_user_notes_path(@user) %>" class="btn button-sidebar-wide"><%= t('buttons.faculty_journal_for', 'Faculty Journal for %{user}', :user => context_user_name(@context, @user)) %></a>
     <% end %>
@@ -53,11 +53,11 @@
         </ul>
       </div>
     </div>
-    <% if @user.accounts && !@user.accounts.empty? %>
-      <h3><%= t('accounts', 'Accounts') %> <%= count_if_any(@user.accounts.count) %></h3>
+    <% if @user.all_accounts && !@user.all_accounts.empty? %>
+      <h3><%= t('accounts', 'Accounts') %> <%= count_if_any(@user.all_accounts.count) %></h3>
       <div class="accounts" style="font-size: 1.2em">
         <ul class="unstyled_list context_list" style="margin-left: 5px; font-size: 0.9em; margin-bottom: 10px; max-height: 200px; overflow: auto;">
-          <% @user.accounts.each do |account| %>
+          <% @user.all_accounts.each do |account| %>
             <% num_enrollments += 1 %>
             <li>
               <a href="<%= url_for(account) %>">

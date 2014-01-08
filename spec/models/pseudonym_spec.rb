@@ -16,7 +16,7 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
+require File.expand_path(File.dirname(__FILE__) + '/../sharding_spec_helper.rb')
 
 describe Pseudonym do
 
@@ -30,6 +30,14 @@ describe Pseudonym do
     pseudonym_model
     @pseudonym.unique_id = 'c'
     @pseudonym.save!
+  end
+
+  it "should allow apostrophes in usernames" do
+    pseudonym = Pseudonym.new(:unique_id => "o'brien@example.com",
+                              :password => 'password',
+                              :password_confirmation => 'password')
+    pseudonym.user_id = 1
+    pseudonym.should be_valid
   end
 
   it "should validate the presence of user and account ids" do
@@ -65,6 +73,20 @@ describe Pseudonym do
     p1.save!
     # Should allow creating a new active one if the others are deleted
     Pseudonym.create!(:unique_id => 'cody@instructure.com', :user => u)
+  end
+
+  it "should share a root_account_id with its account" do
+    pseudonym = Pseudonym.new
+    pseudonym.stubs(:account).returns(stub(root_account_id: 1, id: 2))
+
+    pseudonym.root_account_id.should == 1
+  end
+
+  it "should use its account_id as a root_account_id if its account has no root" do
+    pseudonym = Pseudonym.new
+    pseudonym.stubs(:account).returns(stub(root_account_id: nil, id: 1))
+
+    pseudonym.root_account_id.should == 1
   end
   
   it "should find the correct pseudonym for logins" do
@@ -175,29 +197,8 @@ describe Pseudonym do
     it "should set last_timeout_failure on LDAP servers that timeout" do
       Net::LDAP.any_instance.expects(:bind_as).once.raises(Timeout::Error, "timed out")
       @pseudonym.ldap_bind_result('test').should be_false
-      ErrorReport.last.message.should match /Timeout::Error|timed out/ # 1.8/1.9 compat
+      ErrorReport.last.message.should match(/timed out/)
       @aac.reload.last_timeout_failure.should > 1.minute.ago
-    end
-
-    it "should not attempt to bind if last_timeout_failure is set recently" do
-      # calling again should not attempt to bind
-      @aac.update_attribute(:last_timeout_failure, 5.seconds.ago)
-      Net::LDAP.any_instance.expects(:bind_as).never
-      @pseudonym.ldap_bind_result('test').should be_false
-
-      # updating the config should reset :last_timeout_failure
-      @aac.reload.update_attributes(:auth_port => 637)
-      @aac.last_timeout_failure.should be_nil
-      Net::LDAP.any_instance.expects(:bind_as).returns(true)
-      @pseudonym.reload
-      @pseudonym.ldap_bind_result('test').should be_true
-    end
-
-    it "should allow another attempt once last_timeout_failure is sufficiently in the past" do
-      @aac.update_attribute(:last_timeout_failure, 5.seconds.ago)
-      Setting.set('ldap_failure_wait_time', 2.seconds)
-      Net::LDAP.any_instance.expects(:bind_as).returns(true)
-      @pseudonym.ldap_bind_result('test').should be_true
     end
   end
 
@@ -249,7 +250,7 @@ describe Pseudonym do
     end
 
     it "should offer the user sms if there is one" do
-      communication_channel_model(:path_type => 'sms', :user_id => @user.id)
+      communication_channel_model(:path_type => 'sms')
       @user.communication_channels << @cc
       @user.save!
       @user.sms.should eql(@cc.path)
@@ -257,7 +258,7 @@ describe Pseudonym do
     end
 
     it "should be able to change the user sms" do
-      communication_channel_model(:path_type => 'sms', :user_id => @user.id, :path => 'admin@example.com')
+      communication_channel_model(:path_type => 'sms', :path => 'admin@example.com')
       @pseudonym.sms = @cc
       @pseudonym.sms.should eql('admin@example.com')
       @pseudonym.user.sms.should eql('admin@example.com')
@@ -332,12 +333,36 @@ describe Pseudonym do
 
       Account.default.settings = { :canvas_authentication => false }
       Account.default.account_authorization_configs.create!(:auth_type => 'ldap')
+      Account.default.save!
+      @pseudonym.reload
 
       @pseudonym.stubs(:valid_ldap_credentials?).returns(false)
       @pseudonym.valid_arbitrary_credentials?('qwerty').should be_false
 
       @pseudonym.stubs(:valid_ldap_credentials?).returns(true)
       @pseudonym.valid_arbitrary_credentials?('anything').should be_true
+    end
+  end
+
+  describe "authenticate" do
+    context "sharding" do
+      specs_require_sharding
+
+      it "should only query pertinent shards" do
+        account2 = @shard1.activate { Account.create! }
+        Pseudonym.expects(:associated_shards).with('abc').returns([@shard1])
+        Pseudonym.expects(:active).once.returns(Pseudonym.none)
+        GlobalLookups.stubs(:enabled?).returns(true)
+        Pseudonym.authenticate({ unique_id: 'abc', password: 'def' }, [Account.default.id, account2])
+      end
+
+      it "should only query pertinent shards" do
+        account2 = @shard1.activate { Account.create! }
+        Pseudonym.expects(:associated_shards).with('abc').returns([Shard.default, @shard1])
+        Pseudonym.expects(:active).twice.returns(Pseudonym.none)
+        GlobalLookups.stubs(:enabled?).returns(true)
+        Pseudonym.authenticate({ unique_id: 'abc', password: 'def' }, [Account.default.id, account2])
+      end
     end
   end
 

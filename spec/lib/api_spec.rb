@@ -190,7 +190,7 @@ describe Api do
     end
 
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should find users from other shards" do
         @shard1.activate { @user2 = User.create! }
@@ -261,34 +261,26 @@ describe Api do
 
     it 'should try and make params when non-ar_id columns have returned with ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
       Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"test-lookup" => ["thing1", "thing2"], "other-lookup" => ["thing2", "thing3"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).with({"other-lookup" => ["thing2", "thing3"]}, {:lookups => {"id" => "test-lookup"}}, "test-root-account").returns({"find-params" => "test"})
-      collection.expects(:all).with({"find-params" => "test", :select => :id}).returns([object1, object2])
-      object1.expects(:id).returns("thing2")
-      object2.expects(:id).returns("thing3")
+      collection.expects(:scoped).with("find-params" => "test").returns(collection)
+      collection.expects(:pluck).with(:id).returns(["thing2", "thing3"])
       Api.map_ids("test-ids", collection, "test-root-account").should == ["thing1", "thing2", "thing3"]
     end
 
     it 'should try and make params when non-ar_id columns have returned without ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
       Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"other-lookup" => ["thing2", "thing3"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).with({"other-lookup" => ["thing2", "thing3"]}, {:lookups => {"id" => "test-lookup"}}, "test-root-account").returns({"find-params" => "test"})
-      collection.expects(:all).with({"find-params" => "test", :select => :id}).returns([object1, object2])
-      object1.expects(:id).returns("thing2")
-      object2.expects(:id).returns("thing3")
+      collection.expects(:scoped).with("find-params" => "test").returns(collection)
+      collection.expects(:pluck).with(:id).returns(["thing2", "thing3"])
       Api.map_ids("test-ids", collection, "test-root-account").should == ["thing2", "thing3"]
     end
 
     it 'should not try and make params when no non-ar_id columns have returned with ar_id columns' do
       collection = mock()
-      object1 = mock()
-      object2 = mock()
       Api.expects(:sis_find_sis_mapping_for_collection).with(collection).returns({:lookups => {"id" => "test-lookup"}})
       Api.expects(:sis_parse_ids).with("test-ids", {"id" => "test-lookup"}).returns({"test-lookup" => ["thing1", "thing2"]})
       Api.expects(:sis_make_params_for_sis_mapping_and_columns).at_most(0)
@@ -542,20 +534,20 @@ describe Api do
     it 'should return an array of numeric ids' do
       Api.map_non_sis_ids([1, 2, 3, 4]).should == [1, 2, 3, 4]
     end
-    
+
     it 'should convert string ids to numeric' do
       Api.map_non_sis_ids(%w{5 4 3 2}).should == [5, 4, 3, 2]
     end
-    
+
     it "should exclude things that don't look like ids" do
       Api.map_non_sis_ids(%w{1 2 lolrus 4chan 5 6!}).should == [1, 2, 5]
     end
-    
+
     it "should strip whitespace" do
       Api.map_non_sis_ids(["  1", "2  ", " 3 ", "4\n"]).should == [1, 2, 3, 4]
     end
   end
-  
+
   context ".api_user_content" do
     class T
       extend Api
@@ -570,6 +562,72 @@ describe Api do
     end
   end
 
+  context ".process_incoming_html_content" do
+    class T
+      extend Api
+    end
+
+    it "should add context to files and remove verifier parameters" do
+      course
+      attachment_model(:context => @course)
+
+      html = %{<div>
+        Here are some bad links
+        <a href="/files/#{@attachment.id}/download">here</a>
+        <a href="/files/#{@attachment.id}/download?verifier=lollercopter&amp;anotherparam=something">here</a>
+        <a href="/files/#{@attachment.id}/preview?sneakyparam=haha&amp;verifier=lollercopter&amp;another=blah">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?noverifier=here">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?verifier=lol&amp;a=1">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?b=2&amp;verifier=something&amp;c=2">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/notdownload?b=2&amp;verifier=shouldstay&amp;c=2">but not here</a>
+      </div>}
+      fixed_html = T.process_incoming_html_content(html)
+      fixed_html.should == %{<div>
+        Here are some bad links
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?anotherparam=something">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?sneakyparam=haha&amp;another=blah">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/preview?noverifier=here">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?a=1">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/download?b=2&amp;c=2">here</a>
+        <a href="/courses/#{@course.id}/files/#{@attachment.id}/notdownload?b=2&amp;verifier=shouldstay&amp;c=2">but not here</a>
+      </div>}
+    end
+  end
+
+  context ".paginate" do
+    let(:request) { stub('request', query_parameters: {}) }
+    let(:response) { stub('response', headers: {}) }
+    let(:controller) { stub('controller', request: request, response: response, params: {}) }
+
+    describe "ordinal collection" do
+      let(:collection) { [1, 2, 3] }
+
+      it "should not raise Folio::InvalidPage for pages past the end" do
+        Api.paginate(collection, controller, 'example.com', page: collection.size + 1, per_page: 1).
+          should == []
+      end
+
+      it "should not raise Folio::InvalidPage for integer-equivalent non-Integer pages" do
+        Api.paginate(collection, controller, 'example.com', page: '1').
+          should == collection
+      end
+
+      it "should raise Folio::InvalidPage for pages <= 0" do
+        lambda{ Api.paginate(collection, controller, 'example.com', page: 0) }.
+          should raise_error(Folio::InvalidPage)
+
+        lambda{ Api.paginate(collection, controller, 'example.com', page: -1) }.
+          should raise_error(Folio::InvalidPage)
+      end
+
+      it "should raise Folio::InvalidPage for non-integer pages" do
+        lambda{ Api.paginate(collection, controller, 'example.com', page: 'abc') }.
+          should raise_error(Folio::InvalidPage)
+      end
+    end
+  end
+
   context ".build_links" do
     it "should not build links if not pagination is provided" do
       Api.build_links("www.example.com").should be_empty
@@ -578,6 +636,7 @@ describe Api do
     it "should not build links for empty pages" do
       Api.build_links("www.example.com/", {
         :per_page => 10,
+        :current => "",
         :next => "",
         :prev => "",
         :first => "",
@@ -585,15 +644,17 @@ describe Api do
       }).should be_empty
     end
 
-    it "should build next, prev, first, and last links if provided" do
+    it "should build current, next, prev, first, and last links if provided" do
       links = Api.build_links("www.example.com/", {
         :per_page => 10,
+        :current => 8,
         :next => 4,
         :prev => 2,
         :first => 1,
         :last => 10,
       })
       links.all?{ |l| l =~ /www.example.com\/\?/ }.should be_true
+      links.find{ |l| l.match(/rel="current"/)}.should =~ /page=8&per_page=10>/
       links.find{ |l| l.match(/rel="next"/)}.should =~ /page=4&per_page=10>/
       links.find{ |l| l.match(/rel="prev"/)}.should =~ /page=2&per_page=10>/
       links.find{ |l| l.match(/rel="first"/)}.should =~ /page=1&per_page=10>/
@@ -626,6 +687,28 @@ describe Api do
         :next => 4,
       })
       links.first.should == "<www.example.com/?page=4&per_page=10>; rel=\"next\""
+    end
+  end
+
+  describe "#accepts_jsonapi?" do
+    class TestApiController
+      include Api
+    end
+
+    it "returns true when application/vnd.api+json in the Accept header" do
+      controller = TestApiController.new
+      controller.stubs(:request).returns stub(headers: {
+        'Accept' => 'application/vnd.api+json'
+      })
+      controller.accepts_jsonapi?.should == true
+    end
+
+    it "returns false when application/vnd.api+json not in the Accept header" do
+      controller = TestApiController.new
+      controller.stubs(:request).returns stub(headers: {
+        'Accept' => 'application/json'
+      })
+      controller.accepts_jsonapi?.should == false
     end
   end
 end

@@ -21,20 +21,14 @@ module ApplicationHelper
   include TextHelper
   include LocaleSelection
 
-  # Admins of the given context can see the User.name attribute,
-  # but everyone else sees the User.short_name attribute.
-  def context_user_name(context, user, last_name_first=false)
+  def context_user_name(context, user)
     return nil unless user
     return user.short_name if !context && user.respond_to?(:short_name)
-    context_code = context
-    context_code = context.asset_string if context.respond_to?(:asset_string)
-    context_code ||= "no_context"
     user_id = user
     user_id = user.id if user.is_a?(User) || user.is_a?(OpenObject)
-    Rails.cache.fetch(['context_user_name', context_code, user_id, last_name_first].cache_key, {:expires_in=>15.minutes}) do
-      user = User.find_by_id(user_id)
-      res = user.short_name || user.name
-      res
+    Rails.cache.fetch(['context_user_name', context, user_id].cache_key, {:expires_in=>15.minutes}) do
+      user = user.respond_to?(:short_name) ? user : User.find(user_id)
+      user.short_name || user.name
     end
   end
 
@@ -166,7 +160,7 @@ module ApplicationHelper
     end
   end
 
-  def avatar_image(user_or_id, width=50)
+  def avatar_image(user_or_id, width=50, opts = {})
     user_id = user_or_id.is_a?(User) ? user_or_id.id : user_or_id
     user = user_or_id.is_a?(User) && user_or_id
     if session["reported_#{user_id}"]
@@ -185,14 +179,17 @@ module ApplicationHelper
         alt = user ? user.short_name : ''
         [url, alt]
       end
-      image_tag(image_url, :style => "width: #{width}px; min-height: #{(width/1.6).to_i}px; max-height: #{(width*1.6).to_i}px", :alt => alt_tag)
+      image_tag(image_url,
+        :style => "width: #{width}px; min-height: #{(width/1.6).to_i}px; max-height: #{(width*1.6).to_i}px",
+        :alt => alt_tag,
+        :class => Array(opts[:image_class]).join(' '))
     end
   end
 
-  def avatar(user_or_id, context_code, width=50)
+  def avatar(user_or_id, context_code, width=50, opts = {})
     user_id = user_or_id.is_a?(User) ? user_or_id.id : user_or_id
     if service_enabled?(:avatars)
-      link_to(avatar_image(user_or_id, width), "#{context_prefix(context_code)}/users/#{user_id}", :style => 'z-index: 2; position: relative;', :class => 'avatar')
+      link_to(avatar_image(user_or_id, width, opts), "#{context_prefix(context_code)}/users/#{user_id}", :style => 'z-index: 2; position: relative;', :class => 'avatar img-circle')
     end
   end
 
@@ -213,7 +210,7 @@ module ApplicationHelper
   # context_url(@context, :controller => :assignments, :action => :show)
   def context_url(context, *opts)
     @context_url_lookup ||= {}
-    context_name = (context ? context.class.base_ar_class : context.class).name.underscore
+    context_name = url_helper_context_from_object(context)
     lookup = [context ? context.id : nil, context_name, *opts]
     return @context_url_lookup[lookup] if @context_url_lookup[lookup]
     res = nil
@@ -237,8 +234,31 @@ module ApplicationHelper
     @context_url_lookup[lookup] = res
   end
 
-  def message_user_path(user)
-    conversations_path(:user_id => user.id)
+  def full_url(path)
+    uri = URI.parse(request.url)
+    uri.path = ''
+    uri.query = ''
+    URI.join(uri, path).to_s
+  end
+
+  def url_helper_context_from_object(context)
+    (context ? context.class.base_ar_class : context.class).name.underscore
+  end
+
+  def message_user_path(user, context = nil)
+    context = context || @context
+    context = nil unless context.is_a?(Course)
+    conversations_path(user_id: user.id, user_name: user.name,
+                       context_id: context.try(:asset_string))
+  end
+
+  # Public: Determine if the currently logged-in user is an account or site admin.
+  #
+  # Returns a boolean.
+  def current_user_is_account_admin
+    [@domain_root_account, Account.site_admin].map do |account|
+      account.membership_for_user(@current_user)
+    end.any?
   end
 
   def hidden(include_style=false)
@@ -293,9 +313,9 @@ module ApplicationHelper
     logger.warn "database lookups happening in view code instead of controller code for wiki sidebar (load_wiki_sidebar)"
     @wiki_sidebar_data = {}
     includes = [:active_assignments, :active_discussion_topics, :active_quizzes, :active_context_modules]
-    includes.each{|i| @wiki_sidebar_data[i] = @context.send(i).scoped({:limit => 150}) if @context.respond_to?(i) }
+    includes.each{|i| @wiki_sidebar_data[i] = @context.send(i).limit(150) if @context.respond_to?(i) }
     includes.each{|i| @wiki_sidebar_data[i] ||= [] }
-    @wiki_sidebar_data[:wiki_pages] = @context.wiki.wiki_pages.active.scoped(:order => 'title', :limit => 150) if @context.respond_to?(:wiki)
+    @wiki_sidebar_data[:wiki_pages] = @context.wiki.wiki_pages.active.order(:title).limit(150) if @context.respond_to?(:wiki)
     @wiki_sidebar_data[:wiki_pages] ||= []
     if can_do(@context, @current_user, :manage_files)
       @wiki_sidebar_data[:root_folders] = Folder.root_folders(@context)
@@ -322,9 +342,9 @@ module ApplicationHelper
     output = js_blocks.inject('') do |str, e|
       # print file and line number for debugging in development mode.
       value = ""
-      value << "<!-- BEGIN SCRIPT BLOCK FROM: " + e[:file_and_line] + " --> \n" if Rails.env == "development"
+      value << "<!-- BEGIN SCRIPT BLOCK FROM: " + e[:file_and_line] + " --> \n" if Rails.env.development?
       value << e[:contents]
-      value << "<!-- END SCRIPT BLOCK FROM: " + e[:file_and_line] + " --> \n" if Rails.env == "development"
+      value << "<!-- END SCRIPT BLOCK FROM: " + e[:file_and_line] + " --> \n" if Rails.env.development?
       str << value
     end
     raw(output)
@@ -347,6 +367,10 @@ module ApplicationHelper
 
   class << self
     attr_accessor :cached_translation_blocks
+  end
+
+  def include_js_translations?
+    !!(params[:include_js_translations] || use_optimized_js?)
   end
 
   # See `js_base_url`
@@ -392,6 +416,10 @@ module ApplicationHelper
       bundles << {:media => 'all'}
       include_stylesheets(*bundles)
     end
+  end
+
+  def include_common_stylesheets
+    include_stylesheets :vendor, :common, media: "all"
   end
 
   def section_tabs
@@ -453,6 +481,60 @@ module ApplicationHelper
     end
   end
 
+  def embedded_chat_quicklaunch_params
+    {
+      user_id: @current_user.id,
+      course_id: @context.id,
+      canvas_url: "#{HostUrl.protocol}://#{HostUrl.default_host}",
+      tool_consumer_instance_guid: @context.root_account.lti_guid
+    }
+  end
+
+  def embedded_chat_url
+    chat_tool = active_external_tool_by_id('chat')
+    return unless chat_tool && chat_tool.url && chat_tool.custom_fields['mini_view_url']
+    uri = URI.parse(chat_tool.url)
+    uri.path = chat_tool.custom_fields['mini_view_url']
+    uri.to_s
+  end
+
+  def embedded_chat_enabled
+    chat_tool = active_external_tool_by_id('chat')
+    chat_tool && chat_tool.url && chat_tool.custom_fields['mini_view_url'] && Canvas::Plugin.value_to_boolean(chat_tool.custom_fields['embedded_chat_enabled'])
+  end
+
+  def embedded_chat_visible
+    @show_embedded_chat != false &&
+      !@embedded_view &&
+      !@body_class_no_headers &&
+      @current_user &&
+      @context.is_a?(Course) &&
+      embedded_chat_enabled &&
+      external_tool_tab_visible('chat')
+  end
+
+  def active_external_tool_by_id(tool_id)
+    # don't use for groups. they don't have account_chain_ids
+    tool = @context.context_external_tools.active.find_by_tool_id(tool_id)
+    return tool if tool
+
+    # account_chain_ids is in the order we need to search for tools
+    # unfortunately, the db will return an arbitrary one first.
+    # so, we pull all the tools (probably will only have one anyway) and look through them here
+    tools = ContextExternalTool.active.where(:context_type => 'Account', :context_id => @context.account_chain_ids, :tool_id => tool_id).all
+    @context.account_chain_ids.each do |account_id|
+      tool = tools.find {|t| t.context_id == account_id}
+      return tool if tool
+    end
+    nil
+  end
+
+  def external_tool_tab_visible(tool_id)
+    tool = active_external_tool_by_id(tool_id)
+    return false unless tool
+    @context.tabs_available(@current_user).find {|tc| tc[:id] == tool.asset_string}.present?
+  end
+
   def license_help_link
     @include_license_dialog = true
     link_to(image_tag('help.png'), '#', :class => 'license_help_link no-hover', :title => "Help with content licensing")
@@ -507,14 +589,15 @@ module ApplicationHelper
     global_inst_object = { :environment =>  Rails.env }
     {
       :allowMediaComments       => Kaltura::ClientV3.config && @context.try_rescue(:allow_media_comments?),
-      :kalturaSettings          => Kaltura::ClientV3.config.try(:slice, 'domain', 'resource_domain', 'rtmp_domain', 'partner_id', 'subpartner_id', 'player_ui_conf', 'player_cache_st', 'kcw_ui_conf', 'upload_ui_conf', 'max_file_size_bytes'),
+      :kalturaSettings          => Kaltura::ClientV3.config.try(:slice, 'domain', 'resource_domain', 'rtmp_domain', 'partner_id', 'subpartner_id', 'player_ui_conf', 'player_cache_st', 'kcw_ui_conf', 'upload_ui_conf', 'max_file_size_bytes', 'do_analytics'),
       :equellaEnabled           => !!equella_enabled?,
-      :googleAnalyticsAccount   => Setting.get_cached('google_analytics_key', nil),
+      :googleAnalyticsAccount   => Setting.get('google_analytics_key', nil),
       :http_status              => @status,
       :error_id                 => @error && @error.id,
       :disableGooglePreviews    => !service_enabled?(:google_docs_previews),
       :disableScribdPreviews    => !feature_enabled?(:scribd),
       :disableCrocodocPreviews  => !feature_enabled?(:crocodoc),
+      :enableScribdHtml5        => feature_enabled?(:scribd_html5),
       :logPageViews             => !@body_class_no_headers,
       :maxVisibleEditorButtons  => 3,
       :editorButtons            => editor_buttons,
@@ -531,16 +614,17 @@ module ApplicationHelper
     contexts << @context if @context && @context.respond_to?(:context_external_tools)
     contexts += @context.account_chain if @context.respond_to?(:account_chain)
     contexts << @domain_root_account if @domain_root_account
+    return [] if contexts.empty?
     Rails.cache.fetch((['editor_buttons_for'] + contexts.uniq).cache_key) do
-      tools = ContextExternalTool.active.having_setting('editor_button').scoped(:conditions => contexts.map{|context| "(context_type='#{context.class.base_class.to_s}' AND context_id=#{context.id})"}.join(" OR "))
+      tools = ContextExternalTool.active.having_setting('editor_button').where(contexts.map{|context| "(context_type='#{context.class.base_class.to_s}' AND context_id=#{context.id})"}.join(" OR "))
       tools.sort_by(&:id).map do |tool|
         {
           :name => tool.label_for(:editor_button, nil),
           :id => tool.id,
-          :url => tool.settings[:editor_button][:url] || tool.url,
-          :icon_url => tool.settings[:editor_button][:icon_url] || tool.settings[:icon_url],
-          :width => tool.settings[:editor_button][:selection_width],
-          :height => tool.settings[:editor_button][:selection_height]
+          :url => tool.editor_button(:url),
+          :icon_url => tool.editor_button(:icon_url),
+          :width => tool.editor_button(:selection_width),
+          :height => tool.editor_button(:selection_height)
         }
       end
     end
@@ -595,15 +679,19 @@ module ApplicationHelper
     opts[:indent_width] ||= 3
     opts[:depth] ||= 0
     opts[:options_so_far] ||= []
+    if opts.has_key?(:all_folders)
+      opts[:sub_folders] = opts.delete(:all_folders).to_a.group_by{|f| f.parent_folder_id}
+    end
+
     folders.each do |folder|
       opts[:options_so_far] << %{<option value="#{folder.id}" #{'selected' if opts[:selected_folder_id] == folder.id}>#{"&nbsp;" * opts[:indent_width] * opts[:depth]}#{"- " if opts[:depth] > 0}#{html_escape folder.name}</option>}
-      child_folders = if opts[:all_folders]
-                        opts[:all_folders].select {|f| f.parent_folder_id == folder.id }
-                      else
-                        folder.active_sub_folders.by_position
-                      end
       if opts[:max_depth].nil? || opts[:depth] < opts[:max_depth]
-        folders_as_options(child_folders, opts.merge({:depth => opts[:depth] + 1}))
+        child_folders = if opts[:sub_folders]
+                          opts[:sub_folders][folder.id] || []
+                        else
+                          folder.active_sub_folders.by_position
+                        end
+        folders_as_options(child_folders, opts.merge({:depth => opts[:depth] + 1})) if child_folders.any?
       end
     end
     opts[:depth] == 0 ? raw(opts[:options_so_far].join("\n")) : nil
@@ -647,6 +735,7 @@ module ApplicationHelper
       {
         :longName => "#{course.name} - #{course.short_name}",
         :shortName => course.name,
+        :courseCode => course.course_code,
         :href => course_path(course, :invitation => course.read_attribute(:invitation)),
         :term => term || nil,
         :subtitle => subtitle,
@@ -698,7 +787,7 @@ module ApplicationHelper
     @current_user.set_menu_data(session[:enrollment_uuid])
     [
       @current_user.menu_courses(session[:enrollment_uuid]),
-      @current_user.accounts,
+      @current_user.all_accounts,
       @current_user.cached_current_group_memberships,
       @current_user.enrollments.ended
     ].any?{ |e| e.respond_to?(:count) && e.count > 0 }
@@ -714,7 +803,7 @@ module ApplicationHelper
 
   def help_link
     url = ((@domain_root_account && @domain_root_account.settings[:support_url]) || (Account.default && Account.default.settings[:support_url]))
-    show_feedback_link = Setting.get_cached("show_feedback_link", "false") == "true"
+    show_feedback_link = Setting.get("show_feedback_link", "false") == "true"
     css_classes = []
     css_classes << "support_url" if url
     css_classes << "help_dialog_trigger" if show_feedback_link
@@ -738,7 +827,11 @@ module ApplicationHelper
 
   def get_global_includes
     return @global_includes if defined?(@global_includes)
-    @global_includes = [Account.site_admin.global_includes_hash]
+    @global_includes = []
+    if @current_user && @current_user.enabled_theme != "default"
+      @global_includes << {:css => "compiled/#{@current_user.enabled_theme}"}
+    end
+    @global_includes << Account.site_admin.global_includes_hash
     @global_includes << @domain_root_account.global_includes_hash if @domain_root_account.present?
     if @domain_root_account.try(:sub_account_includes?)
       # get the deepest account to start looking for branding
@@ -761,33 +854,40 @@ module ApplicationHelper
     @global_includes
   end
 
-  def include_account_js
-    includes = get_global_includes.inject([]) do |js_includes, global_include|
-      js_includes << "'#{global_include[:js]}'" if global_include[:js].present?
-      js_includes
+  def include_account_js(options = {})
+    return if params[:global_includes] == '0'
+    includes = get_global_includes.map do |global_include|
+      global_include[:js] if global_include[:js].present?
     end
+    includes.compact!
     if includes.length > 0
-      str = <<-ENDSCRIPT
-        (function() {
-          var inject = function(src) {
-            var s = document.createElement('script');
-            s.src = src;
-            s.type = 'text/javascript';
-            document.body.appendChild(s);
-          };
-          var srcs = [#{includes.join(', ')}];
-          require(['jquery'], function() {
-            for (var i = 0, l = srcs.length; i < l; i++) {
-              inject(srcs[i]);
-            }
-          });
-        })();
-      ENDSCRIPT
-      content_tag(:script, str, {}, false)
+      if options[:raw]
+        includes.unshift("/optimized/vendor/jquery-1.7.2.js")
+        javascript_include_tag(includes)
+      else
+        str = <<-ENDSCRIPT
+          (function() {
+            var inject = function(src) {
+              var s = document.createElement('script');
+              s.src = src;
+              s.type = 'text/javascript';
+              document.body.appendChild(s);
+            };
+            var srcs = #{includes.to_json};
+            require(['jquery'], function() {
+              for (var i = 0, l = srcs.length; i < l; i++) {
+                inject(srcs[i]);
+              }
+            });
+          })();
+        ENDSCRIPT
+        javascript_tag(str)
+      end
     end
   end
 
   def include_account_css
+    return if params[:global_includes] == '0'
     includes = get_global_includes.inject([]) do |css_includes, global_include|
       css_includes << global_include[:css] if global_include[:css].present?
       css_includes
@@ -802,9 +902,22 @@ module ApplicationHelper
   def friendly_datetime(datetime, opts={})
     attributes = { :title => datetime }
     attributes[:pubdate] = true if opts[:pubdate]
-    content_tag(:time, attributes) do
-      datetime_string(datetime)
+    if CANVAS_RAILS2 # see config/initializers/rails2.rb
+      content_tag_without_nil_return(:time, attributes) do
+        datetime_string(datetime)
+      end
+    else
+      content_tag(:time, attributes) do
+        datetime_string(datetime)
+      end
     end
+  end
+
+  # render a link with a tooltip containing a summary of due dates
+  def multiple_due_date_tooltip(assignment, user, opts={})
+    user ||= @current_user
+    presenter = OverrideTooltipPresenter.new(assignment, user, opts)
+    render 'shared/vdd_tooltip', :presenter => presenter
   end
 
   require 'digest'
@@ -843,8 +956,12 @@ module ApplicationHelper
   def agree_to_terms
     # may be overridden by a plugin
     @agree_to_terms ||
-    t("#user.registration.agree_to_terms",
-      "You agree to the *terms of use*.",
-      :wrapper => link_to('\1', "http://www.instructure.com/terms-of-use", :target => "_new"))
+    t("#user.registration.agree_to_terms_and_privacy_policy",
+      "You agree to the *terms of use* and acknowledge the **privacy policy**.",
+      wrapper: {
+        '*' => link_to('\1', @domain_root_account.terms_of_use_url, target: '_blank'),
+        '**' => link_to('\1', @domain_root_account.privacy_policy_url, target: '_blank')
+      }
+    )
   end
 end

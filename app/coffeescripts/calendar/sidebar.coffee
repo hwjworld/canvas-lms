@@ -56,27 +56,25 @@ define [
       @$holder.find('.context_list_context').each (i, li) =>
         $li = $(li)
         visible = $li.data('context') in @contexts
-        $li.toggleClass('checked', visible).toggleClass('not-checked', !visible)
+        $li.toggleClass('checked', visible)
+           .toggleClass('not-checked', !visible)
+           .find('.context-list-toggle-box')
+           .attr('aria-checked', visible)
 
   return sidebar = (contexts, selectedContexts, dataSource) ->
 
-    $holder = $('#context-list-holder')
+    $holder   = $('#context-list-holder')
+    $skipLink = $('.skip-to-calendar')
 
     $holder.html contextListTemplate(contexts: contexts)
 
     visibleContexts = new VisibleContextManager(contexts, selectedContexts, $holder)
 
-    $holder.delegate '.context_list_context', 'click', (event) ->
-      # dont toggle if thy were clicking the .settings button
-      unless $(event.target).closest('[data-add-event]').length
-        visibleContexts.toggle $(this).data('context')
-        userSettings.set('checked_calendar_codes',
-          map($(this).parent().children('.checked'), (c) -> $(c).data('context')))
+    $holder.on 'click keyclick', '.context_list_context', (event) ->
+      visibleContexts.toggle $(this).data('context')
+      userSettings.set('checked_calendar_codes',
+        map($(this).parent().children('.checked'), (c) -> $(c).data('context')))
 
-    $holder.delegate '[data-add-event]', 'click', ->
-      context = $(this).parents('li[data-context]').data('context')
-      event = commonEventFactory(null, contexts)
-      new EditEventDetailsDialog(event).show()
-      # TODO, codesmell: we should get rid of this next line and let EditEventDetailsDialog
-      # take care of that behaviour
-      $('select[class="context_id"]').val(context).triggerHandler('change')
+    $skipLink.on 'click', (e) ->
+      e.preventDefault()
+      $('#content').attr('tabindex', -1).focus()

@@ -1,43 +1,19 @@
 require [
+  'underscore'
+  'Backbone'
   'compiled/views/course_settings/NavigationView'
-  'compiled/views/course_settings/UserCollectionView'
   'compiled/collections/UserCollection'
-  'compiled/views/course_settings/tabs/tabUsers'
+  'compiled/views/feature_flags/FeatureFlagAdminView'
   'vendor/jquery.cookie'
   'course_settings'
-  'external_tools'
   'grading_standards'
-], (NavigationView, UserCollectionView, UserCollection) ->
-
+], (_, Backbone, NavigationView, UserCollection, FeatureFlagAdminView) ->
   nav_view = new NavigationView
     el: $('#tab-navigation')
 
-  loadUsersTab = ->
-    window.app = usersTab: {}
-    for baseRole in ENV.ALL_ROLES
-      eType = baseRole.label.toLowerCase()
-      window.app.usersTab["#{eType}sView"] = new UserCollectionView
-        el: $("##{eType}_enrollments")
-        url: ENV.USERS_URL
-        count: baseRole.count
-        requestParams:
-          enrollment_role: baseRole.base_role_name
-
-      for customRole in baseRole.custom_roles
-        continue if customRole.workflow_state == 'inactive' && customRole.count == 0
-        window.app.usersTab["#{customRole.asset_string}sView"] = new UserCollectionView
-          el: $("##{customRole.asset_string}")
-          url: ENV.USERS_URL
-          count: customRole.count
-          requestParams:
-            enrollment_role: customRole.name
+  featureFlagView = new FeatureFlagAdminView(el: '#tab-features')
+  featureFlagView.collection.fetch()
 
   $ ->
     nav_view.render()
 
-    if $("#tab-users").is(":visible")
-      loadUsersTab()
-
-    $("#course_details_tabs").bind 'tabsshow', (e,ui) ->
-      if ui.tab.hash == '#tab-users' and not window.app?.usersTab
-        loadUsersTab()

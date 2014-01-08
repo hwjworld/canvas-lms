@@ -2,7 +2,10 @@ require File.expand_path(File.dirname(__FILE__) + '/helpers/conversations_common
 
 describe "conversations" do
   it_should_behave_like "in-process server selenium tests"
-  it_should_behave_like "conversations selenium tests"
+
+  before (:each) do
+    conversation_setup
+  end
 
   it "should not allow double form submissions" do
     new_message = 'new conversation message'
@@ -47,11 +50,11 @@ describe "conversations" do
     it "should not open the conversation when the gear menu is clicked" do
       create_conversation
       wait_for_ajaximations
-      f('.al-options').should_not be_displayed
+      f('#menu-wrapper .al-options').should be_nil
       driver.execute_script "$('.admin-link-hover-area').addClass('active')"
       f('.admin-links button').click
       wait_for_ajaximations
-      f('.al-options').should be_displayed
+      f('#menu-wrapper .al-options').should be_displayed
       f('.messages').should_not be_displayed
     end
 
@@ -115,6 +118,44 @@ describe "conversations" do
 
       expect_new_page_load { get '/conversations/archived' }
       f('.conversations .audience').should include_text('New Message')
+    end
+  end
+
+  context "New message... link" do
+    before :each do
+      @me = @user
+      @other = user(:name => 'Some OtherDude')
+      @course.enroll_student(@other)
+      conversation(@me, @other, :workflow_state => 'unread')
+      @participant_me = @conversation
+      @convo = @participant_me.conversation
+      @convo.add_message(@other, "Hey bud!")
+      @convo.add_message(@me, "Howdy friend!")
+      get '/conversations'
+      f('.unread').click
+      wait_for_ajaximations
+    end
+
+    it "should not display on my own message" do
+      # Hover over own message
+      driver.execute_script("$('.message.self:first .send_private_message').focus()")
+      f(".message.self .send_private_message").should_not be_displayed
+    end
+
+    it "should display on messages from others" do
+      # Hover over the message from the other writer to display link
+      # This spec fails locally in isolation and in this context block.
+      driver.execute_script("$('.message.other .send_private_message').focus()")
+      f(".message.other .send_private_message").should be_displayed
+    end
+
+    it "should start new message to the user" do
+      f(".message.other .send_private_message").click()
+      wait_for_ajaximations
+      # token gets added after brief delay
+      sleep(0.4)
+      # create "token" with the 'other' user
+      f("#create_message_form .token_input ul").text().should == @other.name
     end
   end
 
@@ -314,6 +355,32 @@ describe "conversations" do
       f('.others').click
       f('#others_popup').should be_displayed
       ff('#others_popup li').count.should == (@conversation_students.count - 2) # - 2 because the first 2 show up in the conversation summary
+    end
+  end
+
+  context "help menu" do
+    it "should switch to new conversations and redirect" do
+      site_admin_logged_in
+      @user.watched_conversations_intro
+      @user.save
+      new_conversation
+      f('#help-btn').click
+      expect_new_page_load { fj('#try-new-conversations-menu-item').click }
+      f('#inbox').should be_nil # #inbox is in the old conversations ui and not the new ui
+      driver.execute_script("$('#help-btn').click()") #selenium.clik() not working in this case...
+      expect_new_page_load {  fj('#switch-to-old-conversations-menu-item').click }
+      f('#inbox').should be_displayed
+    end
+
+    it "should show the intro" do
+      site_admin_logged_in
+      @user.watched_conversations_intro
+      @user.save
+      new_conversation
+      f('#help-btn').click
+      fj('#conversations-intro-menu-item').click
+      wait_for_ajaximations
+      ff('#conversations_intro').last.should be_displayed
     end
   end
 end

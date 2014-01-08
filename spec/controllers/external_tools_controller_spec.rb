@@ -28,7 +28,7 @@ def new_valid_tool(course)
                                            :consumer_key => "bob",
                                            :shared_secret => "bob")
   tool.url = "http://www.example.com/basic_lti"
-  tool.settings[:resource_selection] = {
+  tool.resource_selection = {
   :url => "http://#{HostUrl.default_host}/selection_test",
   :selection_width => 400,
   :selection_height => 400 }
@@ -107,6 +107,65 @@ describe ExternalToolsController do
       get 'resource_selection', :course_id => @course.id, :external_tool_id => tool.id
       response.should be_success
       assigns[:tool].should == tool
+      assigns[:tool_settings]['custom_canvas_enrollment_state'].should == 'active'
+    end
+
+    it "should set html selection if specified" do
+      course_with_teacher_logged_in(:active_all => true)
+      tool = new_valid_tool(@course)
+      html = "<img src='/blank.png'/>"
+      get 'resource_selection', :course_id => @course.id, :external_tool_id => tool.id, :editor_button => '1', :selection => html
+      response.should be_success
+      assigns[:tool].should == tool
+      assigns[:tool_settings]['text'].should == CGI::escape(html)
+    end
+
+    it "should find account-level tools" do
+      @user = account_admin_user
+      user_session(@user)
+
+      tool = new_valid_tool(Account.default)
+      get 'resource_selection', :account_id => Account.default.id, :external_tool_id => tool.id
+      response.should be_success
+      assigns[:tool].should == tool
+    end
+
+    it "should be accessible even after course is soft-concluded" do
+      course_with_student_logged_in(:active_all => true)
+      @course.conclude_at = 1.day.ago
+      @course.restrict_enrollments_to_course_dates = true
+      @course.save!
+
+      tool = new_valid_tool(@course)
+      get 'resource_selection', :course_id => @course.id, :external_tool_id => tool.id
+      response.should be_success
+      assigns[:tool].should == tool
+      assigns[:tool_settings]['custom_canvas_enrollment_state'].should == 'inactive'
+    end
+
+    it "should be accessible even after course is hard-concluded" do
+      course_with_student_logged_in(:active_all => true)
+      @course.complete
+
+      tool = new_valid_tool(@course)
+      get 'resource_selection', :course_id => @course.id, :external_tool_id => tool.id
+      response.should be_success
+      assigns[:tool].should == tool
+      assigns[:tool_settings]['custom_canvas_enrollment_state'].should == 'inactive'
+    end
+
+    it "should be accessible even after enrollment is concluded and include a parameter indicating inactive state" do
+      course_with_student_logged_in(:active_all => true)
+      e = @student.enrollments.first
+      e.conclude
+      e.reload
+      e.workflow_state.should == 'completed'
+
+      tool = new_valid_tool(@course)
+      get 'resource_selection', :course_id => @course.id, :external_tool_id => tool.id
+      response.should be_success
+      assigns[:tool].should == tool
+      assigns[:tool_settings]['custom_canvas_enrollment_state'].should == 'inactive'
     end
   end
   
@@ -246,7 +305,7 @@ describe ExternalToolsController do
       response.should_not be_success
       assigns[:tool].should be_new_record
       json = json_parse(response.body)
-      json['errors']['base'][0]['message'].should == I18n.t(:invalid_xml_syntax, 'invalid xml syntax')
+      json['errors']['config_xml'][0]['message'].should == I18n.t(:invalid_xml_syntax, 'Invalid xml syntax')
 
       course_with_teacher_logged_in(:active_all => true)
       xml = "<a><b>c</b></a>"
@@ -254,7 +313,7 @@ describe ExternalToolsController do
       response.should_not be_success
       assigns[:tool].should be_new_record
       json = json_parse(response.body)
-      json['errors']['base'][0]['message'].should == I18n.t(:invalid_xml_syntax, 'invalid xml syntax')
+      json['errors']['config_xml'][0]['message'].should == I18n.t(:invalid_xml_syntax, 'Invalid xml syntax')
     end
     
     it "should handle advanced xml configurations by URL retrieval" do
@@ -309,7 +368,7 @@ describe ExternalToolsController do
       response.should_not be_success
       assigns[:tool].should be_new_record
       json = json_parse(response.body)
-      json['errors']['base'][0]['message'].should == I18n.t(:retrieve_timeout, 'could not retrieve configuration, the server response timed out')
+      json['errors']['config_url'][0]['message'].should == I18n.t(:retrieve_timeout, 'could not retrieve configuration, the server response timed out')
     end
     
   end

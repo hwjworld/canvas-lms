@@ -12,11 +12,12 @@
 <head>
   <meta charset="utf-8">
   <title><%= yield :page_title || t('default_page_title', "Canvas LMS") %></title>
-  <noscript> <meta http-equiv=refresh content="0; URL=/enable-javascript.html" /> </noscript>
+  <noscript> <h1>You need to have javascript enabled in order to access this site.</h1> </noscript>
   <!--[if lte IE 6]> <meta http-equiv=refresh content="0; URL=/ie-6-is-not-supported.html" /> <![endif]-->
 
   <%= yield :auto_discovery %>
   <%= yield :head %>
+  <%= yield :meta_tags %>
   <%= include_css_bundles %>
   <!--[if lte IE 8]> <%= javascript_include_tag "vendor/html5.js" %> <![endif]-->
   <%= yield :stylesheets %>

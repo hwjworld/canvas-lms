@@ -44,21 +44,21 @@ describe AssignmentGroupsController, :type => :integration do
         'name' => 'group2',
         'position' => 7,
         'rules' => {},
-        'group_weight' => nil
+        'group_weight' => 0
       },
       {
         'id' => group1.id,
         'name' => 'group1',
         'position' => 10,
         'rules' => {},
-        'group_weight' => nil
+        'group_weight' => 0
       },
       {
         'id' => group3.id,
         'name' => 'group3',
         'position' => 12,
         'rules' => {},
-        'group_weight' => nil
+        'group_weight' => 0
       }
     ]
   end
@@ -106,7 +106,7 @@ describe AssignmentGroupsController, :type => :integration do
         'rules' => {},
         'assignments' => [
           controller.assignment_json(a3,@user,session),
-          controller.assignment_json(a4,@user,session,true)
+          controller.assignment_json(a4,@user,session, include_discussion_topic: true)
         ],
       },
       {
@@ -118,6 +118,102 @@ describe AssignmentGroupsController, :type => :integration do
         'assignments' => [
           controller.assignment_json(a1,@user,session),
           controller.assignment_json(a2,@user,session)
+        ],
+      }
+    ]
+
+    compare_json(json, expected)
+  end
+
+  it "should include module_ids when requested" do
+    course_with_teacher active_all: true
+    mods = 2.times.map { |i| @course.context_modules.create! name: "Mod#{i}" }
+    g = @course.assignment_groups.create! name: 'assignments'
+    a = @course.assignments.create! assignment_group: g, title: "blah"
+    mods.each { |m| m.add_item type: "assignment", id: a.id }
+
+    json = api_call(:get,
+          "/api/v1/courses/#{@course.id}/assignment_groups.json?include[]=assignments&include[]=module_ids",
+          { :controller => 'assignment_groups', :action => 'index',
+            :format => 'json', :course_id => @course.id.to_s,
+            :include => %w[assignments module_ids]})
+    assignment_json = json.first["assignments"].first
+    assignment_json["module_ids"].sort.should == mods.map(&:id).sort
+  end
+
+  it "should not include all dates " do
+    course_with_teacher(:active_all => true)
+    group = @course.assignment_groups.build(:name => 'group1')
+    group.position = 10
+    group.group_weight = 40
+    group.save!
+
+    a1 = @course.assignments.create!(:title => "test1", :assignment_group => group, :points_possible => 10)
+    a2 = @course.assignments.create!(:title => "test2", :assignment_group => group, :points_possible => 12)
+
+    a1.assignment_overrides.create! do |override|
+      override.set = @course.course_sections.first
+      override.title = "All"
+      override.due_at = 1.day.ago
+      override.due_at_overridden = true
+    end
+
+    json = api_call(:get,
+          "/api/v1/courses/#{@course.id}/assignment_groups.json?include[]=assignments",
+          { :controller => 'assignment_groups', :action => 'index',
+            :format => 'json', :course_id => @course.id.to_s,
+            :include => ['assignments'] })
+
+    expected = [
+      {
+        'group_weight' => 40,
+        'id' => group.id,
+        'name' => 'group1',
+        'position' => 10,
+        'rules' => {},
+        'assignments' => [
+          controller.assignment_json(a1, @user,session),
+          controller.assignment_json(a2, @user,session)
+        ],
+      }
+    ]
+
+    compare_json(json, expected)
+  end
+
+  it "should include all dates" do
+    course_with_teacher(:active_all => true)
+    group = @course.assignment_groups.build(:name => 'group1')
+    group.position = 10
+    group.group_weight = 40
+    group.save!
+
+    a1 = @course.assignments.create!(:title => "test1", :assignment_group => group, :points_possible => 10)
+    a2 = @course.assignments.create!(:title => "test2", :assignment_group => group, :points_possible => 12)
+
+    a1.assignment_overrides.create! do |override|
+      override.set = @course.course_sections.first
+      override.title = "All"
+      override.due_at = 1.day.ago
+      override.due_at_overridden = true
+    end
+
+    json = api_call(:get,
+          "/api/v1/courses/#{@course.id}/assignment_groups.json?include[]=assignments&include[]=all_dates",
+          { :controller => 'assignment_groups', :action => 'index',
+            :format => 'json', :course_id => @course.id.to_s,
+            :include => ['assignments', 'all_dates'] })
+
+    expected = [
+      {
+        'group_weight' => 40,
+        'id' => group.id,
+        'name' => 'group1',
+        'position' => 10,
+        'rules' => {},
+        'assignments' => [
+          controller.assignment_json(a1, @user,session, :include_all_dates => true),
+          controller.assignment_json(a2, @user,session, :include_all_dates => true)
         ],
       }
     ]
@@ -147,7 +243,7 @@ describe AssignmentGroupsController, :type => :integration do
     group['assignments'].first['name'].should == 'test1'
   end
 
-  it "should not return weights that aren't being applied" do
+  it "should return weights that aren't being applied" do
     course_with_teacher(:active_all => true)
     @course.update_attribute(:group_weighting_scheme, 'equal')
 
@@ -158,7 +254,7 @@ describe AssignmentGroupsController, :type => :integration do
                     { :controller => 'assignment_groups', :action => 'index',
                       :format => 'json', :course_id => @course.to_param })
 
-    json.each { |group| group['group_weight'].should be_nil }
+    json.each { |group| group['group_weight'].should == 50 }
   end
 
   it "should not explode on assignments with <objects> with percentile widths" do
@@ -175,4 +271,216 @@ describe AssignmentGroupsController, :type => :integration do
              :course_id => @course.id.to_s,
              :include => ['assignments'])
   end
+
+  it "should not return unpublished assignments to students" do
+    course_with_student(:active_all => true)
+    @course.root_account.enable_feature!(:draft_state)
+    @course.require_assignment_group
+    assignment = @course.assignments.create! do |a|
+      a.title = "test"
+      a.assignment_group = @course.assignment_groups.first
+      a.points_possible = 10
+      a.workflow_state = "unpublished"
+    end
+    assignment.should be_unpublished
+
+    json = api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups.json?include[]=assignments",
+                    :controller => 'assignment_groups',
+                    :action => 'index',
+                    :format => 'json',
+                    :course_id => @course.id.to_s,
+                    :include => ['assignments'])
+    json.first['assignments'].should be_empty
+  end
+end
+
+
+describe AssignmentGroupsApiController, :type => :integration do
+  include Api
+  include Api::V1::Assignment
+
+  context '#show' do
+
+    before do
+      course_with_teacher(:active_all => true)
+      rules_in_db = "drop_lowest:1\ndrop_highest:1\nnever_drop:1\nnever_drop:2\n"
+      @group = @course.assignment_groups.create!(:name => 'group', :rules => rules_in_db)
+    end
+
+    it 'should succeed' do
+      api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups/#{@group.id}",
+        :controller => 'assignment_groups_api',
+        :action => 'show',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @group.id.to_s)
+    end
+
+    it 'should fail if the assignment group does not exist' do
+      not_exist = @group.id + 100
+      raw_api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups/#{not_exist}",
+        :controller => 'assignment_groups_api',
+        :action => 'show',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => not_exist.to_s)
+      response.status.to_i.should == 404
+    end
+
+    it 'should include assignments' do
+      @course.assignments.create!(:title => "test", :assignment_group => @group, :points_possible => 10)
+      json = api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups/#{@group.id}?include[]=assignments",
+        :controller => 'assignment_groups_api',
+        :action => 'show',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @group.id.to_s,
+        :include => ['assignments'])
+
+      json['assignments'].should_not be_empty
+    end
+
+    it 'should return never_drop rules as strings with Accept header' do
+      rules = {'never_drop' => ["1","2"], 'drop_lowest' => 1, 'drop_highest' => 1}
+      json = api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups/#{@group.id}", {
+        :controller => 'assignment_groups_api',
+        :action => 'show',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @group.id.to_s},
+        {},
+        { 'Accept' => 'application/json+canvas-string-ids' })
+
+      json['rules'].should == rules
+    end
+
+    it 'should return never_drop rules as ints without Accept header' do
+      rules = {'never_drop' => [1,2], 'drop_lowest' => 1, 'drop_highest' => 1}
+      json = api_call(:get, "/api/v1/courses/#{@course.id}/assignment_groups/#{@group.id}", {
+        :controller => 'assignment_groups_api',
+        :action => 'show',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @group.id.to_s}
+        )
+
+      json['rules'].should == rules
+    end
+
+  end
+  context '#create' do
+    before do
+      course_with_teacher(:active_all => true)
+    end
+
+    it 'should create an assignment_group' do
+      params = {'name' => 'Some group', 'position' => 1}
+      lambda {
+        api_call(:post, "/api/v1/courses/#{@course.id}/assignment_groups", {
+          :controller => 'assignment_groups_api',
+          :action => 'create',
+          :format => 'json',
+          :course_id => @course.id.to_s},
+          params)
+      }.should change(AssignmentGroup, :count).by(1)
+    end
+  end
+
+  context '#update' do
+    before do
+      course_with_teacher(:active_all => true)
+      @assignment_group = @course.assignment_groups.create!(:name => 'Some group', :position => 1)
+    end
+
+    it 'should update an assignment group' do
+      params = {'name' => 'A different name'}
+      json = api_call(:put, "/api/v1/courses/#{@course.id}/assignment_groups/#{@assignment_group.id}", {
+        :controller => 'assignment_groups_api',
+        :action => 'update',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @assignment_group.id.to_s},
+        params)
+
+      json['name'].should == 'A different name'
+      @assignment_group.reload
+      @assignment_group.name.should == 'A different name'
+    end
+
+    it 'should update rules properly' do
+      rules = {'never_drop' => ["1","2"], 'drop_lowest' => 1, 'drop_highest' => 1}
+      rules_in_db = "drop_lowest:1\ndrop_highest:1\nnever_drop:1\nnever_drop:2\n"
+      params = {'rules' => rules}
+      json = api_call(:put, "/api/v1/courses/#{@course.id}/assignment_groups/#{@assignment_group.id}", {
+        :controller => 'assignment_groups_api',
+        :action => 'update',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @assignment_group.id.to_s},
+        params,
+        { 'Accept' => 'application/json+canvas-string-ids' })
+
+      json['rules'].should == rules
+      @assignment_group.reload
+      @assignment_group.rules.should == rules_in_db
+    end
+  end
+
+  context '#destroy' do
+    before do
+      course_with_teacher(:active_all => true)
+      @assignment_group = @course.assignment_groups.create!(:name => 'Some group', :position => 1)
+    end
+
+    it 'should destroy an assignment group' do
+
+      api_call(:delete, "/api/v1/courses/#{@course.id}/assignment_groups/#{@assignment_group.id}",
+        :controller => 'assignment_groups_api',
+        :action => 'destroy',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @assignment_group.id.to_s)
+
+      @assignment_group.reload.workflow_state.should == 'deleted'
+    end
+
+    it 'should destroy assignments' do
+      a1 = @course.assignments.create!(:title => "test1", :assignment_group => @assignment_group, :points_possible => 10)
+      a2 = @course.assignments.create!(:title => "test2", :assignment_group => @assignment_group, :points_possible => 12)
+
+      api_call(:delete, "/api/v1/courses/#{@course.id}/assignment_groups/#{@assignment_group.id}",
+        :controller => 'assignment_groups_api',
+        :action => 'destroy',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @assignment_group.id.to_s)
+
+      @assignment_group.reload.workflow_state.should == 'deleted'
+      a1.reload.workflow_state.should == 'deleted'
+      a2.reload.workflow_state.should == 'deleted'
+    end
+
+    it 'should move assignments to a specified assignment group' do
+      group2 = @course.assignment_groups.create!(:name => 'Another group', :position => 2)
+      group3 = @course.assignment_groups.create!(:name => 'Yet Another group', :position => 3)
+
+      a1 = @course.assignments.create!(:title => "test1", :assignment_group => @assignment_group, :points_possible => 10)
+      a2 = @course.assignments.create!(:title => "test2", :assignment_group => @assignment_group, :points_possible => 12)
+      a3 = @course.assignments.create!(:title => "test3", :assignment_group => @assignment_group, :points_possible => 8)
+      a4 = @course.assignments.create!(:title => "test4", :assignment_group => @assignment_group, :points_possible => 9)
+
+      api_call(:delete, "/api/v1/courses/#{@course.id}/assignment_groups/#{@assignment_group.id}", {
+        :controller => 'assignment_groups_api',
+        :action => 'destroy',
+        :format => 'json',
+        :course_id => @course.id.to_s,
+        :assignment_group_id => @assignment_group.id.to_s},
+        {:move_assignments_to => group3.id})
+
+      group3.reload
+      group3.assignments.count.should == 4
+      @assignment_group.reload.workflow_state.should == 'deleted'
+    end
+  end
+
 end

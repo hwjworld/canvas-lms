@@ -34,9 +34,10 @@ class CourseSection < ActiveRecord::Base
   has_many :users, :through => :enrollments
   has_many :course_account_associations
   has_many :calendar_events, :as => :context
+  has_many :assignment_overrides, :as => :set, :dependent => :destroy
 
   before_validation :infer_defaults, :verify_unique_sis_source_id
-  validates_presence_of :course_id
+  validates_presence_of :course_id, :root_account_id, :workflow_state
 
   before_save :set_update_account_associations_if_changed
   before_save :maybe_touch_all_enrollments
@@ -50,11 +51,11 @@ class CourseSection < ActiveRecord::Base
   end
 
   def participating_students
-    course.participating_students.scoped(:conditions => ["enrollments.course_section_id = ?", id])
+    course.participating_students.where(:enrollments => { :course_section_id => self })
   end
 
   def participating_admins
-    course.participating_admins.scoped(:conditions => ["enrollments.course_section_id = ? OR NOT COALESCE(enrollments.limit_privileges_to_course_section, ?)", id, false])
+    course.participating_admins.where("enrollments.course_section_id = ? OR NOT COALESCE(enrollments.limit_privileges_to_course_section, ?)", self, false)
   end
 
   def participants
@@ -72,27 +73,31 @@ class CourseSection < ActiveRecord::Base
     when 'MySQL', 'Mysql2'
       User.connection.execute("UPDATE users, enrollments SET users.updated_at=NOW() WHERE users.id=enrollments.user_id AND enrollments.course_section_id=#{self.id}")
     else
-      User.update_all({:updated_at => Time.now.utc}, "id IN (SELECT user_id FROM enrollments WHERE course_section_id=#{self.id})")
+      User.where("id IN (SELECT user_id FROM enrollments WHERE course_section_id=?)", self).update_all(:updated_at => Time.now.utc)
     end
   end
 
   set_policy do
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_sections) }
+    given { |user, session| self.cached_context_grants_right?(user, session, :manage_sections) }
     can :read and can :create and can :update and can :delete
 
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_students, :manage_admin_users) }
+    given { |user, session| self.cached_context_grants_right?(user, session, :manage_students, :manage_admin_users) }
     can :read
 
-    given {|user, session| self.course.account_membership_allows(user, session, :read_roster) }
+    given { |user, session| self.course.account_membership_allows(user, session, :read_roster) }
     can :read
 
-    given {|user, session| self.cached_context_grants_right?(user, session, :manage_calendar) }
+    given { |user, session| self.cached_context_grants_right?(user, session, :manage_calendar) }
     can :manage_calendar
 
-    given {|user, session| self.enrollments.find_by_user_id(user.id) && self.cached_context_grants_right?(user, session, :read_roster) }
+    given { |user, session|
+      user &&
+      self.course.sections_visible_to(user).scoped.where(:id => self).exists? &&
+      self.cached_context_grants_right?(user, session, :read_roster)
+    }
     can :read
 
-    given {|user, session| self.cached_context_grants_right?(user, session, :read_as_admin) }
+    given { |user, session| self.cached_context_grants_right?(user, session, :read_as_admin) }
     can :read_as_admin
   end
 
@@ -168,15 +173,16 @@ class CourseSection < ActiveRecord::Base
     self.default_section = (course.course_sections.active.size == 0)
     old_course.course_sections.reset
     course.course_sections.reset
+    assignment_overrides.active.destroy_all
     user_ids = self.enrollments.map(&:user_id).uniq
 
     old_course_is_unrelated = old_course.id != self.course_id && old_course.id != self.nonxlist_course_id
     if self.root_account_id_changed?
       self.save!
-      self.enrollments.update_all :course_id => course.id, :root_account_id => self.root_account_id
+      self.enrollments.update_all :course_id => course, :root_account_id => self.root_account_id
     else
       self.save!
-      self.enrollments.update_all :course_id => course.id
+      self.enrollments.update_all :course_id => course
     end
     User.send_later_if_production(:update_account_associations, user_ids) if old_course.account_id != course.account_id && !User.skip_updating_account_associations?
     if old_course.id != self.course_id && old_course.id != self.nonxlist_course_id
@@ -213,7 +219,7 @@ class CourseSection < ActiveRecord::Base
   end
 
   def deletable?
-    self.enrollments.count == 0
+    self.enrollments.not_fake.count == 0
   end
 
   def enroll_user(user, type, state='invited')
@@ -228,16 +234,15 @@ class CourseSection < ActiveRecord::Base
   alias_method :destroy!, :destroy
   def destroy
     self.workflow_state = 'deleted'
+    self.enrollments.not_fake.each do |e|
+      e.destroy
+    end
     save!
   end
 
-  named_scope :active, lambda {
-    { :conditions => ['course_sections.workflow_state != ?', 'deleted'] }
-  }
+  scope :active, where("course_sections.workflow_state<>'deleted'")
 
-  named_scope :sis_sections, lambda{|account, *source_ids|
-    {:conditions => {:root_account_id => account.id, :sis_source_id => source_ids}, :order => :sis_source_id}
-  }
+  scope :sis_sections, lambda { |account, *source_ids| where(:root_account_id => account, :sis_source_id => source_ids).order(:sis_source_id) }
 
   def common_to_users?(users)
     users.all?{ |user| self.student_enrollments.active.for_user(user).count > 0 }

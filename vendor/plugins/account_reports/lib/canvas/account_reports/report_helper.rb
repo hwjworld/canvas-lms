@@ -18,19 +18,32 @@
 
 module Canvas::AccountReports::ReportHelper
 
+  def parse_utc_string(datetime)
+    if datetime.is_a? String
+      Time.use_zone('UTC') {Time.zone.parse(datetime)}
+    else
+      datetime
+    end
+  end
+
 # This function will take a datetime or a datetime string and convert into
 # iso8601 for the root_account's timezone
 # A string datetime needs to be in UTC
   def default_timezone_format(datetime, account=root_account)
-    if datetime.is_a? String
-      datetime = Time.use_zone('UTC') do
-        Time.zone.parse(datetime)
-      end
-    end
+    datetime = parse_utc_string(datetime)
     if datetime
       datetime.in_time_zone(account.default_time_zone).iso8601
     else
       nil
+    end
+  end
+
+  # This function will take a datetime or a datetime string and convert into
+  # iso8601 for the root_account's timezone
+  # it will then format the datetime using the given format string
+  def timezone_strftime(datetime, format)
+    if datetime = parse_utc_string(datetime)
+      (datetime.in_time_zone(account.default_time_zone)).strftime(format)
     end
   end
 
@@ -51,9 +64,8 @@ module Canvas::AccountReports::ReportHelper
   end
 
   def term
-    if @account_report.has_parameter? "enrollment_term"
-      @term ||= api_find(root_account.enrollment_terms,
-                         @account_report.parameters["enrollment_term"])
+    if (term_id = (@account_report.has_parameter? "enrollment_term_id") || (@account_report.has_parameter? "enrollment_term"))
+      @term ||= api_find(root_account.enrollment_terms,term_id)
     end
   end
 
@@ -70,40 +82,51 @@ module Canvas::AccountReports::ReportHelper
   end
 
   def course
-    if @account_report.has_parameter? "course"
-      @course ||= api_find(root_account.courses,
-                           @account_report.parameters["course"])
+    if (course_id = (@account_report.has_parameter? "course_id") || (@account_report.has_parameter? "course"))
+      @course ||= api_find(root_account.all_courses, course_id)
+    end
+  end
+
+  def section
+    if section_id = (@account_report.has_parameter? "section_id")
+      @section ||= api_find(root_account.course_sections, section_id)
     end
   end
 
   def add_term_scope(scope,table = 'courses')
     if term
-      scope.scoped(:conditions => ["#{table}.enrollment_term_id=?", term.id])
+      scope.where(table => { :enrollment_term_id => term })
     else
       scope
     end
   end
 
   def add_course_sub_account_scope(scope,table = 'courses')
-    if account.id != root_account.id
-      scope.scoped(:conditions => ["EXISTS (SELECT course_id
-                                            FROM course_account_associations caa
-                                            WHERE caa.account_id = ?
-                                            AND caa.course_id=#{table}.id
-                                            AND caa.course_section_id IS NULL
-                                            )", account.id])
+    if account != root_account
+      scope.where("EXISTS (SELECT course_id
+                           FROM course_account_associations caa
+                           WHERE caa.account_id = ?
+                           AND caa.course_id=#{table}.id
+                           AND caa.course_section_id IS NULL)", account)
+    else
+      scope
+    end
+  end
+
+  def add_course_enrollments_scope(scope,table = 'enrollments')
+    if course
+      scope.where(table => { :course_id => course })
     else
       scope
     end
   end
 
   def add_user_sub_account_scope(scope,table = 'users')
-    if account.id != root_account.id
-      scope.scoped(:conditions => ["EXISTS (SELECT user_id
-                                            FROM user_account_associations uaa
-                                            WHERE uaa.account_id = ?
-                                            AND uaa.user_id=#{table}.id
-                                            )", account.id])
+    if account != root_account
+      scope.where("EXISTS (SELECT user_id
+                           FROM user_account_associations uaa
+                           WHERE uaa.account_id = ?
+                           AND uaa.user_id=#{table}.id)", account)
     else
       scope
     end
@@ -116,15 +139,49 @@ module Canvas::AccountReports::ReportHelper
   end
 
   def extra_text_term(account_report = @account_report)
-    account_report.parameters["extra_text"] = I18n.t(
+    account_report.parameters ||= {}
+    add_extra_text(I18n.t(
       'account_reports.default.extra_text_term', "Term: %{term_name};",
       :term_name => term_name
-    )
+    ))
+  end
+
+  def check_report_key(key)
+    Canvas::AccountReports.for_account(account)[@account_report.report_type][:parameters].keys.include? key
+  end
+
+  def report_extra_text
+    if term && check_report_key(:enrollment_term_id)
+      add_extra_text(I18n.t('account_reports.default.term_text', "Term: %{term_name};",
+                       :term_name => term_name))
+    end
+
+    if start_at && check_report_key(:start_at)
+      add_extra_text(I18n.t('account_reports.default.start_text',
+                            "Start At: %{start_at};", :start_at => default_timezone_format(start_at)))
+    end
+
+    if end_at && check_report_key(:end_at)
+      add_extra_text(I18n.t('account_reports.default.end_text',
+                            "End At: %{end_at};", :end_at => default_timezone_format(end_at)))
+    end
+
+    if course && check_report_key(:course_id)
+      add_extra_text(I18n.t('account_reports.default.course_text',
+                            "For Course: %{course};", :course => course.id))
+    end
+
+    if section && check_report_key(:section_id)
+      add_extra_text(I18n.t('account_reports.default.section_text',
+                            "For Section: %{section};", :section => section.id))
+    end
   end
 
   def send_report(file = nil, account_report = @account_report)
     type = Canvas::AccountReports.for_account(account)[account_report.report_type][:title]
-    options = account_report.parameters["extra_text"]
+    if account_report.has_parameter? "extra_text"
+      options = account_report.parameters["extra_text"]
+    end
     Canvas::AccountReports.message_recipient(
       account_report,
       I18n.t(
@@ -133,4 +190,24 @@ module Canvas::AccountReports::ReportHelper
         :type => type, :account => account.name, :options => options),
       file)
   end
+
+  def write_report(headers)
+    file = Canvas::AccountReports.generate_file(@account_report)
+    CSV.open(file, "w") do |csv|
+      csv << headers
+      yield csv
+    end
+    Shackles.activate(:master) do
+      send_report(file)
+    end
+  end
+
+  def add_extra_text(text)
+    if @account_report.has_parameter?('extra_text')
+      @account_report.parameters["extra_text"] << " #{text}"
+    else
+      @account_report.parameters["extra_text"] = text
+    end
+  end
+
 end

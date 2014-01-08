@@ -11,6 +11,13 @@ describe "Standard Common Cartridge importing" do
     @course_data = @converter.course.with_indifferent_access
     @course_data['all_files_export'] ||= {}
     @course_data['all_files_export']['file_path'] = @course_data['all_files_zip']
+
+    @course = course
+    @migration = ContentMigration.create(:context => @course)
+    @migration.migration_settings[:migration_ids_to_import] = {:copy => {}}
+    enable_cache do
+      @course.import_from_migration(@course_data, nil, @migration)
+    end
   end
   
   after(:all) do
@@ -18,13 +25,7 @@ describe "Standard Common Cartridge importing" do
     if File.exists?(@export_folder)
       FileUtils::rm_rf(@export_folder)
     end
-  end
-
-  before(:each) do
-    @course = course
-    @migration = ContentMigration.create(:context => @course)
-    @migration.migration_settings[:migration_ids_to_import] = {:copy => {}}
-    @course.import_from_migration(@course_data, nil, @migration)
+    truncate_all_tables
   end
 
   it "should import webcontent" do
@@ -41,7 +42,7 @@ describe "Standard Common Cartridge importing" do
     file2_id = @course.attachments.find_by_migration_id("I_00006_Media").id
     
     dt =  @course.discussion_topics.find_by_migration_id("I_00006_R")
-    dt.message.should == %{<p>Your face is ugly. <br><img src="/courses/#{@course.id}/files/#{file1_id}/preview"></p>}
+    dt.message.should match_ignoring_whitespace(%{<p>Your face is ugly. <br><img src="/courses/#{@course.id}/files/#{file1_id}/preview"></p>})
     dt.attachment_id = file2_id
     
     dt =  @course.discussion_topics.find_by_migration_id("I_00009_R")
@@ -51,7 +52,8 @@ describe "Standard Common Cartridge importing" do
   # This also tests the WebLinks, they are just content tags and don't have their own class
   it "should import modules from organization" do
     @course.context_modules.count.should == 3
-    
+    @course.context_modules.map(&:position).should eql [1, 2, 3]
+
     mod1 = @course.context_modules.find_by_migration_id("I_00000")
     mod1.name.should == "Your Mom, Research, & You"
     tag = mod1.content_tags[0]
@@ -125,7 +127,7 @@ describe "Standard Common Cartridge importing" do
     tag.content_id.should == @course.assignments.find_by_migration_id("I_00011_R").id
     tag.indent.should == 0
   end
-  
+
   it "should import external tools" do
     @course.context_external_tools.count.should == 2
     et = @course.context_external_tools.find_by_migration_id("I_00010_R")
@@ -153,13 +155,13 @@ describe "Standard Common Cartridge importing" do
   it "should import assessment data" do
     if Qti.qti_enabled?
       quiz = @course.quizzes.find_by_migration_id("I_00003_R")
-      quiz.quiz_questions.count.should == 11
+      quiz.active_quiz_questions.size.should == 11
       quiz.title.should == "Pretest"
       quiz.quiz_type.should == 'assignment'
       quiz.allowed_attempts.should == 2
       quiz.time_limit.should == 120
 
-      question = quiz.quiz_questions.first
+      question = quiz.active_quiz_questions.first
       question.question_data[:points_possible].should == 2
 
       bank = @course.assessment_question_banks.find_by_migration_id("I_00004_R_QDB_1")
@@ -225,55 +227,52 @@ describe "Standard Common Cartridge importing" do
     
     it "should point to new attachment from module" do
       @course.context_modules.count.should == 3
-      
+
       mod1 = @course.context_modules.find_by_migration_id("I_00000")
       mod1.content_tags.active.count.should == (Qti.qti_enabled? ? 5 : 4)
       mod1.name.should == "Your Mom, Research, & You"
       tag = mod1.content_tags.active[0]
       tag.content_type.should == 'Attachment'
       tag.content_id.should == @course.attachments.active.find_by_migration_id("I_00001_R").id
-      puts mod1.content_tags.active.count
     end
   end
 
   context "selective import" do
-    before(:each) do
+    it "should selectively import files" do
       @course = course
       @migration = ContentMigration.create(:context => @course)
       @migration.migration_settings[:migration_ids_to_import] = {
-              :copy => {"topics" => {"I_00006_R" => true},
+              :copy => {"discussion_topics" => {"I_00006_R" => true},
                         "everything" => "0",
                         "folders" =>
                                 {"I_00006_Media" => true,
                                  "6a35b0974f59819404dc86d48fe39fc3" => true,
                                  "I_00001_R" => true},
                         "all_quizzes" => "1",
-                        "all_external_tools" => "0",
+                        "all_context_external_tools" => "0",
                         "all_groups" => "0",
-                        "all_modules" => "0",
+                        "all_context_modules" => "0",
                         "all_rubrics" => "0",
                         "assessment_questions" => "1",
-                        "all_wikis" => "0",
-                        "all_files" => "0",
+                        "all_wiki_pages" => "0",
+                        "all_attachments" => "0",
                         "all_assignments" => "1",
                         "topic_entries" => {"undefined" => true},
-                        "external_tools" => {"I_00011_R" => true},
+                        "context_external_tools" => {"I_00011_R" => true},
                         "shift_dates" => "0",
-                        "all_topics" => "0",
+                        "all_discussion_topics" => "0",
                         "all_announcements" => "0",
-                        "files" =>
+                        "attachments" =>
                                 {"I_00006_Media" => true,
                                  "7acb90d1653008e73753aa2cafb16298" => true,
                                  "6a35b0974f59819404dc86d48fe39fc3" => true,
                                  "I_00003_R_IMAGERESOURCE" => true,
                                  "I_00001_R" => true},
-                        "modules" => {"I_00000" => true},
+                        "context_modules" => {"I_00000" => true},
                         "all_assignment_groups" => "0"}}.with_indifferent_access
 
       @course.import_from_migration(@course_data, nil, @migration)
-    end
 
-    it "should selectively import files" do
       @course.attachments.count.should == 5
       @course.context_external_tools.count.should == 1
       @course.context_external_tools.first.migration_id.should == "I_00011_R"
@@ -282,6 +281,126 @@ describe "Standard Common Cartridge importing" do
       @course.wiki.wiki_pages.count.should == 0
       @course.discussion_topics.count.should == 1
       @course.discussion_topics.first.migration_id.should == 'I_00006_R'
+    end
+
+    it "should not import all attachments if :files does not exist" do
+      @course = course
+      @migration = ContentMigration.create(:context => @course)
+      @migration.migration_settings[:migration_ids_to_import] = {
+          :copy => {"everything" => "0"}}.with_indifferent_access
+
+      @course.import_from_migration(@course_data, nil, @migration)
+
+      @course.attachments.count.should == 0
+    end
+
+    it "should import discussion_topics with 'announcement' type if announcements are selected" do
+      @course = course
+      @migration = ContentMigration.create(:context => @course)
+      @migration.migration_settings[:migration_ids_to_import] = {
+          :copy => {"announcements" => {"I_00006_R" => true}, "everything" => "0"}}.with_indifferent_access
+
+      @course_data['discussion_topics'].find{|topic| topic['migration_id'] == 'I_00006_R'}['type'] = 'announcement'
+
+      @course.import_from_migration(@course_data, nil, @migration)
+
+      @course.announcements.count.should == 1
+    end
+  end
+
+  context "position conflicts" do
+    append_before do
+      @import_json =
+          {
+              "modules" => [
+                  {
+                      "title" => "monkeys",
+                      "position" => 1,
+                      "migration_id" => 'm_monkeys'
+                  },
+                  {
+                      "title" => "ponies",
+                      "position" => 2,
+                      "migration_id" => 'm_ponies'
+                  },
+                  {
+                      "title" => "last",
+                      "position" => 3,
+                      "migration_id" => "m_last"
+                  }
+              ],
+              "assignment_groups" => [
+                  {
+                      "title" => "monkeys",
+                      "position" => 1,
+                      "migration_id" => "ag_monkeys"
+                  },
+                  {
+                      "title" => "ponies",
+                      "position" => 2,
+                      "migration_id" => "ag_ponies"
+                  },
+                  {
+                      "title" => "last",
+                      "position" => 3,
+                      "migration_id" => "ag_last"
+                  }
+              ]
+          }
+    end
+
+    it "should fix position conflicts for modules" do
+      @course = course
+
+      mod1 = @course.context_modules.create :name => "ponies"
+      mod1.position = 1
+      mod1.migration_id = 'm_ponies'
+      mod1.save!
+
+      mod2 = @course.context_modules.create :name => "monsters"
+      mod2.migration_id = 'm_monsters'
+      mod2.position = 2
+      mod2.save!
+
+      @migration = ContentMigration.create(:context => @course)
+      @migration.migration_settings[:migration_ids_to_import] = {
+          :copy => {
+              "everything" => "0",
+              "all_context_modules" => "1"
+          }
+      }
+      @course.import_from_migration(@import_json, nil, @migration)
+
+      mods = @course.context_modules.to_a
+      mods.map(&:position).should eql [1, 2, 3, 4]
+      mods.map(&:name).should eql %w(monkeys ponies monsters last)
+    end
+
+    it "should fix position conflicts for assignment groups" do
+      @course = course
+
+      ag1 = @course.assignment_groups.create :name => "ponies"
+      ag1.position = 1
+      ag1.migration_id = 'ag_ponies'
+      ag1.save!
+
+      ag2 = @course.assignment_groups.create :name => "monsters"
+      ag2.position = 2
+      ag2.migration_id = 'ag_monsters'
+      ag2.save!
+
+      @migration = ContentMigration.create(:context => @course)
+      @migration.migration_settings[:migration_ids_to_import] = {
+          :copy => {
+              "everything" => "0",
+              "all_assignment_groups" => "1"
+          }
+      }
+      @course.import_from_migration(@import_json, nil, @migration)
+
+      ags = @course.assignment_groups.to_a
+      ags.map(&:position).should eql [1, 2, 3, 4]
+      ags.map(&:name).should eql %w(monkeys ponies monsters last)
     end
   end
 
@@ -422,7 +541,7 @@ describe "non-ASCII attachment names" do
                 "web_resources/abc.txt"]
     @converter.resources.values.map { |v| v[:files][0][:href] }.sort.should == contents.sort
 
-    Zip::ZipFile.open File.join(@converter.base_export_dir, "all_files.zip") do |zipfile|
+    Zip::File.open File.join(@converter.base_export_dir, "all_files.zip") do |zipfile|
       zipcontents = zipfile.entries.map(&:name)
       (contents - zipcontents).should eql []
     end

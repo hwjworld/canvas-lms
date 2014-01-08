@@ -12,13 +12,13 @@ define [
     defaults:
       initialPage: 0
       descendants: 2
-      showMoreDescendants: 2
+      showMoreDescendants: 50
       children: 3
 
     $window: $ window
 
     initialize: ->
-      @options.showMoreDescendants ?= @options.descendants
+      super
       @collection.on 'add', @addEntry
       @model.on 'change', @hideIfFiltering
 
@@ -99,6 +99,7 @@ define [
       @$window.scrollTo $el, 200,
         offset: -150
         onAfter: =>
+          $el.find('.author').first().focus()
           # pretty blinking
           setTimeout (-> $el.addClass 'highlight' ), 200
           setTimeout (-> $el.removeClass 'highlight' ), 400
@@ -122,7 +123,7 @@ define [
         el: @$el[0]
         collection: @collection.getPageAsCollection(page - 1, perPage: @options.children)
         descendants: @options.descendants
-        showMoreDescendants: @options.descendants
+        showMoreDescendants: @options.showMoreDescendants
         displayShowMore: no
         threaded: @options.threaded
         root: true

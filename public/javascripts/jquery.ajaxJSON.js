@@ -22,9 +22,9 @@ define([
   'jquery' /* $ */
 ], function(INST, $) {
 
-  $.originalGetJSON = $.getJSON;
+  var _getJSON = $.getJSON;
   $.getJSON = function(url, data, callback) {
-    var xhr = $.originalGetJSON(url, data, callback);
+    var xhr = _getJSON.apply($, arguments);
     $.ajaxJSON.storeRequest(xhr, url, 'GET', data);
     return xhr;
   };
@@ -100,6 +100,10 @@ define([
     if(options && options.timeout) {
       params.timeout = options.timeout;
     }
+    if(options && options.contentType) {
+      params.contentType = options.contentType;
+    }
+
     var xhr = $.ajax(params);
     $.ajaxJSON.storeRequest(xhr, url, submit_type, data);
     return xhr;

@@ -92,8 +92,15 @@ describe ConversationBatch do
       end
     end
 
+    it "should send group messages" do
+      batch = ConversationBatch.generate(@message, [@user, @user3], :async, group: true)
+      batch.deliver
+      Conversation.count.should == 2
+      Conversation.all.each { |c| c.should_not be_private }
+    end
+
     context "sharding" do
-      it_should_behave_like "sharding"
+      specs_require_sharding
 
       it "should reuse existing private conversations" do
         @shard1.activate { @user4 = user }

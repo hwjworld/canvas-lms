@@ -92,5 +92,85 @@ describe WikiPagesController do
       response.body.should include(new_body)
     end
   end
+
+  context "draft state forwarding" do
+    before do
+      @front = @course.wiki.front_page
+      @wiki_page = @course.wiki.wiki_pages.create :title => "a-page", :body => "body"
+      @base_url = "/courses/#{@course.id}/"
+      @course.reload
+    end
+
+    context "draft state enabled" do
+      before do
+        @course.root_account.enable_feature!(:draft_state)
+      end
+
+      it "should forward /wiki to /pages index if no front page" do
+        @course.wiki.has_no_front_page = true
+        @course.wiki.save!
+        get @base_url + "wiki"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/pages\z}
+      end
+
+      it "should forward /wiki to /pages/front-page" do
+        @front.set_as_front_page!
+        get @base_url + "wiki"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/pages/front-page\z}
+      end
+
+      it "should forward /wiki/name to /pages/name" do
+        get @base_url + "wiki/a-page"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/pages/a-page\z}
+      end
+
+      it "should forward /wiki/name/revisions to /pages/name/revisions" do
+        get @base_url + "wiki/a-page/revisions"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/pages/a-page/revisions\z}
+      end
+
+      it "should forward /wiki/name/revisions/revision to /pages/name/revisions" do
+        get @base_url + "wiki/a-page/revisions/42"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/pages/a-page/revisions\z}
+      end
+    end
+
+    context "draft state disabled" do
+      before do
+        @course.root_account.disable_feature!(:draft_state)
+      end
+
+      it "should forward /pages to /wiki" do
+        get @base_url + "pages"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/wiki\z}
+      end
+
+      it "should forward /pages/name to /wiki/name" do
+        get @base_url + "pages/a-page"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/wiki/a-page\z}
+      end
+
+      it "should forward /pages/name/edit to /wiki/name#edit" do
+        get @base_url + "pages/a-page/edit"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/wiki/a-page#edit\z}
+      end
+
+      it "should forward /pages/name/revisions to /wiki/name/revisions" do
+        get @base_url + "pages/a-page/revisions"
+        response.code.should == '302'
+        response.redirected_to.should =~ %r{/wiki/a-page/revisions\z}
+      end
+    end
+
+  end
+
 end
 

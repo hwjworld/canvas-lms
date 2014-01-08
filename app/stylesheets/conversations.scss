@@ -2,6 +2,7 @@
 @import "utilities/context_search";
 
 body {
+  min-width: 960px;
   overflow: hidden;
   &.too_small {
     overflow: auto;
@@ -14,7 +15,6 @@ body {
   background: #a3a3a3 url(/images/messages/messages-background.png) 0 0 repeat;
   min-height: 425px;
   a {
-    color: #2571bd;
     &.black {
       color: #000000;
     }
@@ -427,6 +427,14 @@ ul.messages {
       top: 14px;
       left: 14px;
     }
+    .send_private_message { opacity: 0; }
+    .send_private_message:focus { opacity: 1; }
+    &:hover {
+      .send_private_message { opacity: 1; }
+    }
+    &.self {
+      .send_private_message { display: none; }
+    }
   }
   .date {
     margin-right: -40px;
@@ -832,6 +840,9 @@ ul.messages, ul.messages.private, ul.messages.private li:hover {
       padding: 0 0 5px 0;
       border: 0;
     }
+    input[type=file] {
+      height: auto;
+    }
   }
   .media_comment {
     overflow: visible;
@@ -938,11 +949,38 @@ form {
   vertical-align: middle;
 }
 
-#help_crumb {
+#help-btn {
+  color: #333;
   position: absolute;
-  right: 12px;
-  top: 12px;
+  right: 0px;
+  top: 8px;
   z-index: 3;
+
+  &:hover, &:focus {
+    color: #0088cc;
+    text-decoration: none;
+  }
+
+  .icon-mini-arrow-down {
+    position: relative;
+    right: 5px;
+  }
+}
+
+// for the non-dropdown help menu. remove this when new conversations is released
+#conversations-intro-btn {
+  color: #333;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 3;
+
+  .icon-question {
+    &:hover, &:focus {
+      color: #0088cc;
+      text-decoration: none;
+    }
+  }
 }
 
 .spin_holder {
